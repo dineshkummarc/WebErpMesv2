@@ -3,6 +3,7 @@
 namespace App\Models\Workflow;
 
 use App\Models\File;
+use App\Models\Concerns\HasSalesLineType;
 use App\Models\Planning\Task;
 use Illuminate\Support\Number;
 use App\Models\Workflow\Quotes;
@@ -21,7 +22,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class QuoteLines extends Model
 {
-    use HasFactory, SoftDeletes, LogsActivity;
+    use HasFactory, SoftDeletes, LogsActivity, HasSalesLineType;
     
     // Fillable attributes for mass assignment
     protected $fillable= ['quotes_id', 
@@ -36,12 +37,38 @@ class QuoteLines extends Model
                             'accounting_vats_id',
                             'delivery_date',
                             'statu',
-                            'use_calculated_price'
+                            'use_calculated_price',
+                            'line_type',
+                            'hide_on_pdf',
+                            'pdf_package',
                         ];
+
+    protected $casts = [
+        'hide_on_pdf' => 'boolean',
+        'pdf_package' => 'integer',
+    ];
+
+    protected function neutralizePresentationLine(): void
+    {
+        $this->use_calculated_price = false;
+    }
 
     public function quote()
     {
-        return $this->belongsTo(Quotes::class, 'quotes_id');
+        // Une ligne de trame doit retrouver sa trame (gamme, fichiers…).
+        return $this->belongsTo(Quotes::class, 'quotes_id')->withoutGlobalScope(Quotes::TEMPLATE_SCOPE);
+    }
+
+    /**
+     * Écarte les lignes des trames de devis, que le scope global de Quotes ne
+     * filtre pas quand on interroge les lignes directement.
+     */
+    public function scopeExcludingTemplates(Builder $query): Builder
+    {
+        return $query->whereNotIn(
+            $query->qualifyColumn('quotes_id'),
+            Quotes::onlyTemplates()->withTrashed()->select('id')
+        );
     }
 
     public function orderLine()

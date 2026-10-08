@@ -275,16 +275,19 @@ return [
             'text'            => 'whiteboard_trans_key',
             'url'             => 'collaboration/whiteboards',
             'topnav_right'    => true,
+            'classes'         => 'wem-hide-mobile',
         ],
         [
             'text'            => 'Iframe mode',
             'url'             => 'iframe-mode',
             'topnav_right'    => true,
+            'classes'         => 'wem-hide-mobile',
         ],
         [
             'text'            => 'users_trans_key',
             'url'             => 'users',
             'topnav_right'    => true,
+            'classes'         => 'wem-hide-mobile',
         ],
         [
             'type'         => 'fullscreen-widget',
@@ -310,6 +313,7 @@ return [
         [
             'text' => 'language_trans_key',
             'topnav_right' => true,
+            'classes' => 'wem-hide-mobile',
             'icon' => 'flag-icon flag-icon-gb',
             'submenu' => [
                 [
@@ -1044,6 +1048,17 @@ return [
                     'type' => 'css',
                     'asset' => true,
                     'location' => 'css/theme-pro.css',
+                ],
+            ],
+        ],
+        // Ajustements globaux sous 768 px (marges, onglets, champs, modales).
+        'Mobile' => [
+            'active' => true,
+            'files' => [
+                [
+                    'type' => 'css',
+                    'asset' => true,
+                    'location' => 'css/mobile.css',
                 ],
             ],
         ],

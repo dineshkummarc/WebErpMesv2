@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Workflow;
 
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
+use App\Enums\SalesLineType;
 use Illuminate\Support\Number;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -11,6 +13,9 @@ use App\Services\Cad\CadImportService;
 use App\Services\ImportCsvService;
 use App\Services\CustomFieldService;
 use App\Services\OrderService;
+use App\Services\Quotes\QuoteLineCopier;
+use App\Services\Planning\BillOfMaterialsCopier;
+use App\Services\Quotes\QuoteLineToOrderLineConverter;
 use App\Services\SelectDataService;
 use App\Http\Controllers\Controller;
 use App\Models\Admin\Factory;
@@ -20,8 +25,6 @@ use App\Models\Workflow\Quotes;
 use App\Models\Workflow\Orders;
 use App\Models\Workflow\QuoteLines;
 use App\Models\Workflow\QuoteLineDetails;
-use App\Models\Workflow\OrderLines;
-use App\Models\Workflow\OrderLineDetails;
 use App\Models\Products\Products;
 use App\Models\Products\CustomerPriceList;
 use App\Models\Methods\MethodsUnits;
@@ -65,6 +68,8 @@ class QuoteLinesController extends Controller
         $dir = $sortAsc ? 'asc' : 'desc';
 
         $query = QuoteLines::with(['quote:id,code', 'Unit:id,label', 'VAT:id,label'])
+            ->excludingTemplates()
+            ->articles()
             ->withCount(['Task', 'SubAssembly'])
             ->when($search, fn ($q) => $q->where('label', 'like', '%'.$search.'%'))
             ->when(is_numeric($productId), fn ($q) => $q->where('product_id', $productId))
@@ -226,7 +231,7 @@ class QuoteLinesController extends Controller
 
     public function linesForQuoteJson($quoteId)
     {
-        $quote = Quotes::findOrFail($quoteId);
+        $quote = Quotes::withTemplates()->findOrFail($quoteId);
         abort_unless(auth()->check(), 403);
 
         $lines = QuoteLines::with([
@@ -255,7 +260,7 @@ class QuoteLinesController extends Controller
     public function selectDataForQuoteJson($quoteId)
     {
         abort_unless(auth()->check(), 403);
-        $quote   = Quotes::with('companie')->findOrFail($quoteId);
+        $quote   = Quotes::withTemplates()->with('companie')->findOrFail($quoteId);
         $factory = app('Factory');
 
         return response()->json([
@@ -272,7 +277,7 @@ class QuoteLinesController extends Controller
     public function priceListForProductJson($quoteId, $productId)
     {
         abort_unless(auth()->check(), 403);
-        $quote       = Quotes::with('companie')->findOrFail($quoteId);
+        $quote       = Quotes::withTemplates()->with('companie')->findOrFail($quoteId);
         $factory     = app('Factory');
         $currency    = $factory->curency ?? 'EUR';
         $locale      = config('app.locale', 'fr');
@@ -313,8 +318,12 @@ class QuoteLinesController extends Controller
     public function storeLineJson($quoteId, Request $request)
     {
         abort_unless(auth()->check(), 403);
-        $quote = Quotes::findOrFail($quoteId);
+        $quote = Quotes::withTemplates()->findOrFail($quoteId);
         abort_if($quote->statu != 1, 403);
+
+        if ($request->input('line_type', SalesLineType::Article->value) !== SalesLineType::Article->value) {
+            return $this->storePresentationLine($quote, $request);
+        }
 
         $validated = $request->validate([
             'ordre'              => 'required|numeric|min:1',
@@ -373,6 +382,16 @@ class QuoteLinesController extends Controller
         abort_unless(auth()->check(), 403);
         $line = QuoteLines::where('id', $id)->where('quotes_id', $quoteId)->firstOrFail();
 
+        if (!$line->isArticle()) {
+            $validated = $request->validate([
+                'ordre' => 'required|numeric|min:0',
+                'label' => $line->line_type === SalesLineType::Subtotal->value ? 'nullable|string|max:255' : 'required|string|max:255',
+            ]);
+            $line->update(['ordre' => $validated['ordre'], 'label' => $validated['label'] ?? '']);
+
+            return response()->json(['line' => $this->formatLineJson($line->fresh(['Unit:id,label,code']), app('Factory')->curency ?? 'EUR', config('app.locale'))]);
+        }
+
         $validated = $request->validate([
             'ordre'              => 'required|numeric|min:0',
             'label'              => 'required|string|max:255',
@@ -417,21 +436,8 @@ class QuoteLinesController extends Controller
         $firstStatus = \App\Models\Planning\Status::select('id')->orderBy('order')->first();
         $statusId    = $firstStatus?->id;
 
-        Task::where('products_id', $line->product_id)->get()->each(function ($task) use ($id, $statusId) {
-            $new                  = $task->replicate();
-            $new->quote_lines_id  = $id;
-            $new->products_id     = null;
-            $new->status_id       = $statusId;
-            $new->origin          = '3';
-            $new->save();
-        });
-
-        SubAssembly::where('products_id', $line->product_id)->get()->each(function ($sub) use ($id) {
-            $new                  = $sub->replicate();
-            $new->quote_lines_id  = $id;
-            $new->products_id     = null;
-            $new->save();
-        });
+        app(BillOfMaterialsCopier::class)
+            ->copy('products_id', $line->product_id, 'quote_lines_id', $line->id, '3', $statusId ? ['status_id' => $statusId] : []);
 
         $line->loadCount(['Task', 'SubAssembly']);
         $factory  = app('Factory');
@@ -440,37 +446,23 @@ class QuoteLinesController extends Controller
         return response()->json(['line' => $this->formatLineJson($line, $currency, config('app.locale'))]);
     }
 
-    public function duplicateLineJson($quoteId, $id)
+    public function duplicateLineJson($quoteId, $id, QuoteLineCopier $copier)
     {
         abort_unless(auth()->check(), 403);
+        $quote = Quotes::withTemplates()->findOrFail($quoteId);
+        abort_if($quote->statu != 1, 403);
         $line = QuoteLines::where('id', $id)->where('quotes_id', $quoteId)->firstOrFail();
 
-        $newLine        = $line->replicate();
-        $newLine->ordre = $line->ordre + 1;
-        $newLine->code  = $line->code . '#dup' . $line->id;
-        $newLine->label = $line->label . '#dup' . $line->id;
-        $newLine->save();
+        $newLine = DB::transaction(function () use ($line, $quoteId, $copier) {
+            // La copie s'insère juste sous l'original : on décale la suite.
+            QuoteLines::where('quotes_id', $quoteId)
+                ->where('ordre', '>', $line->ordre)
+                ->increment('ordre');
 
-        $details = QuoteLineDetails::where('quote_lines_id', $id)->first();
-        if ($details) {
-            $newDetails                  = $details->replicate();
-            $newDetails->quote_lines_id = $newLine->id;
-            $newDetails->save();
-        } else {
-            QuoteLineDetails::create(['quote_lines_id' => $newLine->id]);
-        }
-
-        Task::where('quote_lines_id', $id)->get()->each(function ($t) use ($newLine) {
-            $nt                  = $t->replicate();
-            $nt->quote_lines_id = $newLine->id;
-            $nt->origin          = '5';
-            $nt->save();
-        });
-
-        SubAssembly::where('quote_lines_id', $id)->get()->each(function ($s) use ($newLine) {
-            $ns                  = $s->replicate();
-            $ns->quote_lines_id = $newLine->id;
-            $ns->save();
+            return $copier->copy($line, (int) $quoteId, $line->ordre + 1, $line->isArticle() ? [
+                'code'  => $line->code . '#dup' . $line->id,
+                'label' => $line->label . '#dup' . $line->id,
+            ] : []);
         });
 
         $newLine->load(['Unit:id,label,code', 'VAT:id,label,rate', 'Product:id,code,label,drawing_file', 'QuoteLineDetails:id,quote_lines_id,picture']);
@@ -480,6 +472,99 @@ class QuoteLinesController extends Controller
         $currency = $factory->curency ?? 'EUR';
 
         return response()->json(['line' => $this->formatLineJson($newLine, $currency, config('app.locale'))], 201);
+    }
+
+    /**
+     * Devis et trames dont on peut reprendre des lignes, avec leurs lignes.
+     */
+    public function importSourcesJson($quoteId, Request $request)
+    {
+        abort_unless(auth()->check(), 403);
+        Quotes::withTemplates()->findOrFail($quoteId);
+
+        $search = trim((string) $request->get('search', ''));
+
+        $sources = Quotes::withTemplates()
+            ->where('id', '!=', $quoteId)
+            ->whereHas('QuoteLines', fn ($l) => $l->articles())
+            ->with([
+                'companie:id,label',
+                'QuoteLines' => fn ($l) => $l->articles()->select(['id', 'quotes_id', 'ordre', 'code', 'label', 'qty', 'selling_price', 'discount']),
+            ])
+            ->when($search !== '', fn ($q) => $q->where(fn ($w) => $w
+                ->where('code', 'like', '%' . $search . '%')
+                ->orWhere('label', 'like', '%' . $search . '%')
+                ->orWhereHas('companie', fn ($c) => $c->where('label', 'like', '%' . $search . '%'))
+                ->orWhereHas('QuoteLines', fn ($l) => $l->articles()->where(fn ($w) => $w
+                    ->where('label', 'like', '%' . $search . '%')
+                    ->orWhere('code', 'like', '%' . $search . '%')))))
+            // Les trames d'abord, puis les devis les plus récents.
+            ->orderByDesc('is_template')
+            ->orderByDesc('id')
+            ->limit(20)
+            ->get();
+
+        return response()->json([
+            'data' => $sources->map(fn ($q) => [
+                'id'          => $q->id,
+                'code'        => $q->code,
+                'label'       => $q->label,
+                'is_template' => (bool) $q->is_template,
+                'companie'    => $q->is_template ? null : $q->companie?->label,
+                'lines'       => $q->QuoteLines->map(fn ($l) => [
+                    'id'            => $l->id,
+                    'code'          => $l->code,
+                    'label'         => $l->label,
+                    'qty'           => $l->qty,
+                    'selling_price' => (float) $l->getRawOriginal('selling_price'),
+                    'discount'      => $l->discount,
+                ])->values(),
+            ]),
+        ]);
+    }
+
+    /**
+     * Recopie en fin de devis des lignes prises dans un autre devis ou une
+     * trame, avec leur gamme, leur nomenclature et leurs fichiers.
+     */
+    public function importFromJson($quoteId, Request $request, QuoteLineCopier $copier)
+    {
+        abort_unless(auth()->check(), 403);
+        $quote = Quotes::withTemplates()->findOrFail($quoteId);
+        abort_if($quote->statu != 1, 403);
+
+        $validated = $request->validate([
+            'line_ids'   => 'required|array|min:1',
+            'line_ids.*' => 'integer',
+        ]);
+
+        $sources = QuoteLines::whereIn('id', $validated['line_ids'])
+            ->articles()
+            ->where('quotes_id', '!=', $quote->id)
+            ->orderBy('quotes_id')
+            ->orderBy('ordre')
+            ->get();
+
+        $copied = DB::transaction(function () use ($sources, $quote, $copier) {
+            $ordre = (int) QuoteLines::where('quotes_id', $quote->id)->max('ordre');
+
+            return $sources->map(fn (QuoteLines $line) => $copier->copy($line, $quote->id, ++$ordre, [
+                'statu'         => 1,
+                'delivery_date' => null,
+            ]));
+        });
+
+        $factory  = app('Factory');
+        $currency = $factory->curency ?? 'EUR';
+
+        $lines = $copied->map(function (QuoteLines $line) use ($currency) {
+            $line->load(['Unit:id,label,code', 'VAT:id,label,rate', 'Product:id,code,label,drawing_file', 'QuoteLineDetails:id,quote_lines_id,picture']);
+            $line->loadCount(['Task', 'SubAssembly']);
+
+            return $this->formatLineJson($line, $currency, config('app.locale'));
+        });
+
+        return response()->json(['lines' => $lines->values()], 201);
     }
 
     public function moveLineJson($quoteId, $id, Request $request)
@@ -500,7 +585,7 @@ class QuoteLinesController extends Controller
     public function reorderJson($quoteId, Request $request)
     {
         abort_unless(auth()->check(), 403);
-        $quote = Quotes::findOrFail($quoteId);
+        $quote = Quotes::withTemplates()->findOrFail($quoteId);
         abort_if($quote->statu != 1, 403);
 
         $request->validate([
@@ -521,11 +606,11 @@ class QuoteLinesController extends Controller
     public function priceIncreaseJson($quoteId, Request $request)
     {
         abort_unless(auth()->check(), 403);
-        $quote = Quotes::findOrFail($quoteId);
+        $quote = Quotes::withTemplates()->findOrFail($quoteId);
         abort_if($quote->statu != 1, 403);
 
         $request->validate(['amount' => 'required|numeric|gt:0']);
-        $count = QuoteLines::where('quotes_id', $quoteId)->increment('selling_price', (float) $request->amount);
+        $count = QuoteLines::where('quotes_id', $quoteId)->articles()->increment('selling_price', (float) $request->amount);
 
         return response()->json(['updated' => $count]);
     }
@@ -584,7 +669,86 @@ class QuoteLinesController extends Controller
             'detail_url'           => route('quotes.lines.detail.edit', ['idQuote' => $l->quotes_id, 'id' => $l->id]),
             'order_code'           => $l->orderLine?->order?->code,
             'order_url'            => $l->orderLine?->order ? route('orders.show', ['id' => $l->orderLine->orders_id]) : null,
+            'line_type'            => $l->line_type ?? SalesLineType::Article->value,
+            'hide_on_pdf'          => (bool) $l->hide_on_pdf,
+            'pdf_package'          => (int) $l->pdf_package,
         ];
+    }
+
+    /**
+     * Section, sous-total ou texte : ni quantité, ni prix, ni TVA (voir
+     * HasSalesLineType). Insérée à la position demandée, la suite est décalée.
+     */
+    private function storePresentationLine(Quotes $quote, Request $request)
+    {
+        $validated = $request->validate([
+            'line_type' => ['required', Rule::in([SalesLineType::Section->value, SalesLineType::Subtotal->value, SalesLineType::Text->value])],
+            'ordre'     => 'required|integer|min:1',
+            'label'     => $request->input('line_type') === SalesLineType::Subtotal->value ? 'nullable|string|max:255' : 'required|string|max:255',
+        ]);
+
+        $defaultVat  = AccountingVat::getDefault();
+        $defaultUnit = MethodsUnits::getDefault();
+        if (! $defaultVat || ! $defaultUnit) {
+            return response()->json(['error' => 'No default VAT or Unit configured'], 422);
+        }
+
+        $line = DB::transaction(function () use ($quote, $validated, $defaultVat, $defaultUnit) {
+            QuoteLines::where('quotes_id', $quote->id)
+                ->where('ordre', '>=', $validated['ordre'])
+                ->increment('ordre');
+
+            // Colonnes NOT NULL héritées des articles : unité et TVA par défaut, montants à zéro.
+            return QuoteLines::create([
+                'quotes_id'          => $quote->id,
+                'ordre'              => $validated['ordre'],
+                'line_type'          => $validated['line_type'],
+                'code'               => '',
+                'label'              => $validated['label'] ?? '',
+                'qty'                => 0,
+                'selling_price'      => 0,
+                'discount'           => 0,
+                'methods_units_id'   => $defaultUnit->id,
+                'accounting_vats_id' => $defaultVat->id,
+            ]);
+        });
+
+        $line->load(['Unit:id,label,code']);
+
+        return response()->json(['line' => $this->formatLineJson($line, app('Factory')->curency ?? 'EUR', config('app.locale'))], 201);
+    }
+
+    /**
+     * Options d'impression d'une ligne : masquage d'un article, forfait d'une
+     * section (avec son unité). Aucune incidence sur les montants.
+     */
+    public function presentationJson(int $quoteId, int $id, Request $request)
+    {
+        abort_unless(auth()->check(), 403);
+        $quote = Quotes::withTemplates()->findOrFail($quoteId);
+        abort_if($quote->statu != 1, 403);
+        $line = QuoteLines::where('id', $id)->where('quotes_id', $quoteId)->firstOrFail();
+
+        $validated = $request->validate([
+            'hide_on_pdf'      => 'sometimes|boolean',
+            'pdf_package'      => ['sometimes', 'integer', Rule::in([QuoteLines::PACKAGE_NONE, QuoteLines::PACKAGE_AMOUNT, QuoteLines::PACKAGE_UNIT])],
+            'methods_units_id' => 'sometimes|exists:methods_units,id',
+        ]);
+
+        if ($line->isArticle()) {
+            abort_if(array_key_exists('pdf_package', $validated), 422, 'Seule une section peut être imprimée au forfait.');
+            $line->update(array_intersect_key($validated, ['hide_on_pdf' => true]));
+        } elseif ($line->line_type === SalesLineType::Section->value) {
+            abort_if(array_key_exists('hide_on_pdf', $validated), 422, 'Seul un article peut être masqué.');
+            $line->update(array_intersect_key($validated, ['pdf_package' => true, 'methods_units_id' => true]));
+        } else {
+            abort(422, 'Ni masquage ni forfait sur un sous-total ou un texte.');
+        }
+
+        $line->load(['Unit:id,label,code', 'VAT:id,label,rate', 'Product:id,code,label,drawing_file', 'QuoteLineDetails:id,quote_lines_id,picture']);
+        $line->loadCount(['Task', 'SubAssembly']);
+
+        return response()->json(['line' => $this->formatLineJson($line, app('Factory')->curency ?? 'EUR', config('app.locale'))]);
     }
 
     public function storeOrderJson(Request $request, int $quoteId)
@@ -593,17 +757,25 @@ class QuoteLinesController extends Controller
         if (empty($lineIds)) {
             return response()->json(['error' => 'Aucune ligne sélectionnée.'], 422);
         }
+        $presentation = $request->input('presentation', QuoteLineToOrderLineConverter::PRESENTATION_KEEP);
+        if (!in_array($presentation, [QuoteLineToOrderLineConverter::PRESENTATION_KEEP, QuoteLineToOrderLineConverter::PRESENTATION_DROP], true)) {
+            return response()->json(['error' => 'Choix de report des sections invalide.'], 422);
+        }
 
-        $quote = Quotes::findOrFail($quoteId);
+        $quote = Quotes::withTemplates()->findOrFail($quoteId);
         abort_unless($quote->user_id === Auth::id() || Auth::user()->hasRole(['admin','manager']), 403);
+
+        if ($quote->is_template) {
+            return response()->json(['error' => "Une trame de devis ne se convertit pas en commande : créez d'abord un devis à partir de la trame."], 422);
+        }
 
         if (!in_array($quote->statu, [1, 2])) {
             return response()->json(['error' => 'Ce devis ne peut plus être converti en commande (statut invalide).'], 422);
         }
 
-        $factory = app('Factory');
+        $converter = app(QuoteLineToOrderLineConverter::class);
 
-        $order = DB::transaction(function () use ($quote, $lineIds, $factory) {
+        $order = DB::transaction(function () use ($quote, $lineIds, $converter, $presentation) {
             $lastOrder = Orders::latest('id')->first();
             $orderCode = $lastOrder ? 'OR-' . ($lastOrder->id + 1) : 'OR-1';
 
@@ -627,11 +799,11 @@ class QuoteLinesController extends Controller
                 null
             );
 
-            $quoteLineMap = QuoteLines::with(['QuoteLineDetails', 'Task', 'SubAssembly', 'files'])
-                ->whereIn('id', $lineIds)
-                ->where('quotes_id', $quote->id)
-                ->get()
-                ->keyBy('id');
+            $toConvert = $converter->linesToConvert(
+                QuoteLines::with(['QuoteLineDetails', 'Task', 'files'])->where('quotes_id', $quote->id)->get(),
+                $lineIds,
+                $presentation,
+            );
 
             $quote->loadMissing('files');
             $quotePivots = $quote->files->mapWithKeys(fn ($file) => [
@@ -645,93 +817,10 @@ class QuoteLinesController extends Controller
                 $newOrder->files()->attach($quotePivots);
             }
 
-            foreach ($lineIds as $lineId) {
-                $quoteLine = $quoteLineMap->get($lineId);
-                if (!$quoteLine) continue;
+            foreach ($toConvert as $quoteLine) {
+                $converter->convert($quoteLine, $newOrder->id, 7);
 
-                $deliveryDate = $quoteLine->delivery_date ?? now()->addDays(7)->format('Y-m-d');
-                $date = \Carbon\Carbon::parse($deliveryDate);
-                $internalDelay = $date->subDays((int) ($factory->add_delivery_delay_order ?? 0))->format('Y-m-d');
-
-                $newOrderLine = OrderLines::create([
-                    'orders_id'                 => $newOrder->id,
-                    'quote_lines_id'            => $quoteLine->id,
-                    'ordre'                     => $quoteLine->ordre,
-                    'code'                      => $quoteLine->code,
-                    'product_id'                => $quoteLine->product_id,
-                    'label'                     => $quoteLine->label,
-                    'qty'                       => $quoteLine->qty,
-                    'delivered_remaining_qty'   => $quoteLine->qty,
-                    'invoiced_remaining_qty'    => $quoteLine->qty,
-                    'methods_units_id'          => $quoteLine->methods_units_id,
-                    'selling_price'             => $quoteLine->selling_price,
-                    'discount'                  => $quoteLine->discount,
-                    'accounting_vats_id'        => $quoteLine->accounting_vats_id,
-                    'internal_delay'            => $internalDelay,
-                    'delivery_date'             => $quoteLine->delivery_date,
-                ]);
-
-                $detail = $quoteLine->QuoteLineDetails;
-                if ($detail) {
-                    OrderLineDetails::create([
-                        'order_lines_id'     => $newOrderLine->id,
-                        'x_size'             => $detail->x_size,
-                        'y_size'             => $detail->y_size,
-                        'z_size'             => $detail->z_size,
-                        'x_oversize'         => $detail->x_oversize,
-                        'y_oversize'         => $detail->y_oversize,
-                        'z_oversize'         => $detail->z_oversize,
-                        'diameter'           => $detail->diameter,
-                        'diameter_oversize'  => $detail->diameter_oversize,
-                        'material'           => $detail->material,
-                        'thickness'          => $detail->thickness,
-                        'finishing'          => $detail->finishing,
-                        'weight'             => $detail->weight,
-                        'bend_count'         => $detail->bend_count,
-                        'material_loss_rate' => $detail->material_loss_rate,
-                        'cad_file'           => $detail->cad_file,
-                        'cam_file'           => $detail->cam_file,
-                        'cad_file_path'      => $detail->cad_file_path,
-                        'cam_file_path'      => $detail->cam_file_path,
-                        'picture'             => $detail->picture,
-                        'internal_comment'    => $detail->internal_comment,
-                        'external_comment'    => $detail->external_comment,
-                        'custom_requirements' => $detail->custom_requirements,
-                    ]);
-                }
-
-                foreach ($quoteLine->Task as $task) {
-                    $newTask = $task->replicate();
-                    $newTask->order_lines_id = $newOrderLine->id;
-                    $newTask->quote_lines_id = null;
-                    $newTask->origin = '6';
-                    $newTask->save();
-                }
-
-                if ($quoteLine->Task->isNotEmpty()) {
-                    $newOrderLine->tasks_status = 2;
-                    $newOrderLine->save();
-                }
-
-                foreach ($quoteLine->SubAssembly as $sub) {
-                    $newSub = $sub->replicate();
-                    $newSub->order_lines_id = $newOrderLine->id;
-                    $newSub->quote_lines_id = null;
-                    $newSub->save();
-                }
-
-                $linePivots = $quoteLine->files->mapWithKeys(fn ($file) => [
-                    $file->id => [
-                        'role' => $file->pivot->role,
-                        'is_primary' => (bool) $file->pivot->is_primary,
-                    ],
-                ])->all();
-
-                if (!empty($linePivots)) {
-                    $newOrderLine->files()->attach($linePivots);
-                }
-
-                QuoteLines::where('id', $lineId)->update(['statu' => 3]);
+                QuoteLines::where('id', $quoteLine->id)->update(['statu' => 3]);
             }
 
             Quotes::where('id', $quote->id)->update(['statu' => 3]);
@@ -805,7 +894,7 @@ class QuoteLinesController extends Controller
             ->where('quotes_id', $quoteId)
             ->firstOrFail();
 
-        abort_unless($line->code && $line->label, 422);
+        abort_unless($line->isArticle() && $line->code && $line->label, 422);
 
         $service = MethodsServices::where('type', 8)->first();
         $family  = $service ? MethodsFamilies::where('methods_services_id', $service->id)->first() : null;
@@ -848,22 +937,8 @@ class QuoteLinesController extends Controller
             $product->save();
         }
 
-        // Duplicate tasks
-        foreach ($line->Task as $task) {
-            $newTask = $task->replicate();
-            $newTask->products_id    = $product->id;
-            $newTask->quote_lines_id = null;
-            $newTask->origin         = '5';
-            $newTask->save();
-        }
-
-        // Duplicate sub-assemblies
-        foreach ($line->SubAssembly as $sub) {
-            $newSub = $sub->replicate();
-            $newSub->products_id    = $product->id;
-            $newSub->quote_lines_id = null;
-            $newSub->save();
-        }
+        app(BillOfMaterialsCopier::class)
+            ->copy('quote_lines_id', $line->id, 'products_id', $product->id, '5');
 
         // Link product back to the quote line
         $line->product_id = $product->id;
@@ -902,7 +977,7 @@ class QuoteLinesController extends Controller
                 ->where('quotes_id', $quoteId)
                 ->first();
 
-            if (! $line || ! $line->code || ! $line->label) continue;
+            if (! $line || ! $line->isArticle() || ! $line->code || ! $line->label) continue;
 
             if (Products::where('code', $line->code)->exists()) {
                 $skipped[] = ['line_id' => $line->id, 'code' => $line->code, 'label' => $line->label];
@@ -942,20 +1017,8 @@ class QuoteLinesController extends Controller
                 $product->save();
             }
 
-            foreach ($line->Task as $task) {
-                $newTask                  = $task->replicate();
-                $newTask->products_id     = $product->id;
-                $newTask->quote_lines_id  = null;
-                $newTask->origin          = '5';
-                $newTask->save();
-            }
-
-            foreach ($line->SubAssembly as $sub) {
-                $newSub                 = $sub->replicate();
-                $newSub->products_id    = $product->id;
-                $newSub->quote_lines_id = null;
-                $newSub->save();
-            }
+            app(BillOfMaterialsCopier::class)
+                ->copy('quote_lines_id', $line->id, 'products_id', $product->id, '5');
 
             $line->product_id = $product->id;
             $line->save();
@@ -1003,7 +1066,7 @@ class QuoteLinesController extends Controller
             return response()->json(['error' => 'Import CAO désactivé'], 403);
         }
 
-        $quote = Quotes::findOrFail($quoteId);
+        $quote = Quotes::withTemplates()->findOrFail($quoteId);
         abort_if($quote->statu != 1, 403);
         abort_unless($quote->user_id === Auth::id() || Auth::user()->hasRole(['admin', 'manager']), 403);
 

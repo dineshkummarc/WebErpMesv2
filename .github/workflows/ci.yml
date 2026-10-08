@@ -95,6 +95,13 @@ jobs:
           cp .env.example .env
           php artisan key:generate
 
+          # APP_ENV=testing (job env) makes Laravel use the committed
+          # .env.testing, which has no APP_KEY line: the key:generate above
+          # then targets .env.testing and silently writes nothing. Generate the
+          # key here and export it to the job env so every later step has it;
+          # without it the N2P seed migration (Crypt::encryptString) fails.
+          echo "APP_KEY=base64:$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
           # Override Redis-related settings from .env.example
           php -r "\$c=file_get_contents('.env'); \
             \$c=preg_replace('/^APP_ENV=.*/m','APP_ENV=testing',\$c); \

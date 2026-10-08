@@ -15,7 +15,22 @@
 - **Frontend** : React (dominant — composants riches migrés), Blade (layout/shell), Alpine.js (micro-interactions)
 - **Vue.js** : SUPPRIMÉ
 - **Livewire** : SUPPRIMÉ ✅ (reste en vendor uniquement comme dépendance transitive de laravel/pulse)
-- **CSS** : Bootstrap 5.3 via AdminLTE 4 (Tailwind supprimé)
+- **CSS** : le shell (jeroennoten/laravel-adminlte) charge **AdminLTE 3.2 / Bootstrap 4.6**
+  depuis `public/vendor/adminlte` ; Vite compile en plus Bootstrap 5.3 (`resources/sass/app.scss`).
+  Les composants React s'appuient sur les classes **BS4** (`ml-1`, `badge-*`, `float-right`) :
+  ne pas les « moderniser » en BS5 sans migrer le shell. Tailwind supprimé.
+- **Briques de tableau** : `resources/js/components/table/` (`SortIcon`, `Pagination`,
+  `StatusBadge`, `StatusFilter`) — à utiliser plutôt que d'en recopier dans un écran.
+  `DataTable` : tableau d'index déclaratif (liste de colonnes `key/label/render/sortable/
+  filter/total/mobile`), colonnes masquables et réordonnables persistées sous les clés
+  localStorage **existantes** de l'écran, filtres par colonne, total de page, et rendu
+  en cartes sous `md`. L'écran garde son fetch, son tri et sa pagination serveur.
+  Utilisé par les 20 index React. Cas particuliers couverts par des props plutôt que par un
+  tableau écrit à la main : `rowClickable`, `renderExpanded` (formulaire déplié sous la
+  ligne), `renderGroupHeader` / `rowStyle` (regroupement RFQ), `actionsColumn={false}` +
+  colonne `hideable: false` (actions déplaçables), `mobileActions`. Les variantes de rendu
+  historiques (`unsortableIcon`, `unsortableCursor`, `nowrap`, `tableClassName`…) existent
+  pour migrer un écran sans changement visible — ne pas les « nettoyer » sans le vouloir.
 - **Bundler** : Vite
 - **Temps réel** : Laravel Echo + Redis
 - **Tests** : PHPUnit (backend), Vitest (frontend, `resources/js/tests`, `npm test`)
@@ -236,6 +251,71 @@ mais un **cache de lecture**, resynchronisé par `FileStorageService::refreshLeg
   en cas d'échec le navigateur le garde pour réessayer. Sans clé OVH : dictée navigateur.
 - **Compte rendu** : `VisitReportService`, provider IA actif, éditable ; la validation crée un
   événement type 3 « Visite sur site » et fige la visite.
+
+## Dossier d'affaire (synthèse de l'opportunité)
+
+L'affaire **est** l'opportunité : pas d'entité propre. Onglet « Synthèse » (premier, actif)
+de `opportunities.show`, alimenté par `opportunities.json.summary` / `.timeline`
+(`OpportunitySummaryController`, mêmes middlewares que la fiche).
+- **Périmètre** (`App\Services\Affairs\AffairScope`) : devis `opportunities_id` → commandes
+  client `quotes_id` → lignes article → tâches → lignes d'achat `tasks_id` ; factures par
+  `order_id` **ou** par une ligne de facture sur une ligne de l'affaire (facture
+  multi-commandes). Un devis sans opportunité reste un devis courant, jamais rattaché.
+- **`AffairSummaryService`** : étape déduite des documents (`App\Enums\AffairStage`),
+  blocages par règles explicites (devis expiré / envoyé sans réponse, achat en retard,
+  réception partielle, tâche suspendue, commande en retard, facture échue, visite non
+  validée), prochaine action, montants. **9 requêtes quelle que soit la taille**, lectures
+  en `toBase()` (les accesseurs de prix feraient une requête par ligne) — couvert par un
+  test de comptage. Seuils dans `config/affairs.php`.
+- **Permissions** : les sections d'un module dont l'utilisateur n'a pas le menu
+  (`quotes-menu`, `orders-menu`, `purchases-menu`, `deliverys-menu`, `invoices-menu`)
+  disparaissent avec leurs blocages, montants et actions ; l'étape reste calculée sur tout.
+- Front : `components/affairs/AffairSummary.jsx` et `AffairTimeline.jsx` (onglet
+  `#TimeLine`, chargé quand il devient visible). Traductions `resources/lang/*/affairs.php`.
+- Tests : `tests/Feature/Affairs/`.
+
+## Trames de devis, duplication, copie de lignes
+
+Une trame est un devis `quotes.is_template = true`, éditée avec l'écran devis habituel
+(code `TRAME-{id}`, hors numérotation). Elle garde un client de l'origine sans importance :
+le vrai client est choisi à l'instanciation (« Nouveau devis » → « Partir d'une trame »).
+- **Scope global** sur `Quotes` : une trame est invisible partout par défaut (listes,
+  sélecteurs, KPI Eloquent, IA). Un écran qui édite un devis donné passe par
+  `Quotes::withTemplates()` ; `onlyTemplates()` liste les trames. La liaison de route
+  `/quotes/{id}` et `FileableRegistry::find()` incluent les trames.
+- Les agrégats lus **directement** sur `quotes` / `quote_lines` (`DB::table`) ne voient pas le
+  scope : filtrer `is_template` ou `QuoteLines::excludingTemplates()`.
+- Une trame ne se convertit jamais en commande (`storeOrderJson` → 422).
+- Toutes les copies passent par `App\Services\Quotes` (`QuoteDuplicator` pour un devis entier,
+  `QuoteLineCopier` pour une ligne) et `Planning\BillOfMaterialsCopier` pour la gamme : la
+  nomenclature est recopiée sur toute sa profondeur (les niveaux inférieurs ne portent que
+  `sub_assembly_id`).
+
+## Lignes de présentation (sections, sous-totaux, textes, masquage, forfait)
+
+`quote_lines`, `order_lines` et `order_confirmation_lines` portent `line_type`
+(`article` par défaut | `section` | `subtotal` | `text`, enum `App\Enums\SalesLineType`),
+`hide_on_pdf` (article compté dans le total mais non imprimé) et `pdf_package`
+(section imprimée au forfait : 0 détail, 1 montant seul, 2 « 1 × unité », l'unité étant
+le `methods_units_id` de la section — pas d'unité « forfait » en dur).
+- **Une ligne non article vaut zéro** : `HasSalesLineType` force qty/prix/remise à 0 à
+  l'enregistrement, et côté commande reliquats à 0 + statuts livraison/facturation à 3.
+  Une somme SQL non filtrée reste donc juste ; **un comptage ou une moyenne par ligne doit
+  filtrer** (`->articles()`, `->filter->isArticle()`), de même que la ventilation de TVA.
+- **Jamais livrée ni facturée** : `DeliveryLines` et `InvoiceLines` refusent à la création
+  une ligne de commande non article (`OrderLines::guardArticle`), donc rien n'atteint le
+  Factur-X. N2P, planning, nesting et export des commandes ne voient que les articles.
+- **PDF** : `SalesPrintLayout` réécrit `$Document->Lines` (articles visibles + une ligne
+  synthétique par forfait) et fournit `$printRows` aux vues qui savent afficher titres et
+  sous-totaux. Un document sans présentation n'est pas touché (`printRows = null`) :
+  `SalesPdfLegacyRenderingTest` compare le HTML à des références capturées avant la
+  fonctionnalité — **ne jamais régénérer ces références pour faire passer le test**.
+  Une vue `print/custom/*` (non versionnée) qui ignore `$printRows` imprime quand même un
+  document juste, sans les titres.
+- Pages client (lien public devis/commande, portail) : `SalesPrintLayout::webRows()`.
+- Conversion en commande : `presentation=keep|drop` (`QuoteLineToOrderLineConverter::linesToConvert`) ;
+  une section suit si un de ses articles est commandé. L'API d'upsert ne supprime jamais
+  une ligne non article absente du payload.
 
 ## Nesting (imbrication tôle)
 

@@ -289,6 +289,8 @@ Route::group(['prefix' => LaravelLocalization::setLocale(),
 
         Route::get('/{id}', 'App\Http\Controllers\Workflow\OpportunitiesController@show')->name('opportunities.show');
         Route::post('/{id}/json/statu', 'App\Http\Controllers\Workflow\OpportunitiesController@changeStatusJson')->name('opportunities.json.statu');
+        Route::get('/{id}/json/summary', 'App\Http\Controllers\Workflow\OpportunitySummaryController@summary')->name('opportunities.json.summary');
+        Route::get('/{id}/json/timeline', 'App\Http\Controllers\Workflow\OpportunitySummaryController@timeline')->name('opportunities.json.timeline');
         Route::get('/{id}/visit', 'App\Http\Controllers\Workflow\OpportunityVisitsController@show')->name('opportunities.visit');
         Route::post('/{id}/visits/json', 'App\Http\Controllers\Workflow\OpportunityVisitsController@store')->name('opportunities.visits.store');
 
@@ -319,6 +321,10 @@ Route::group(['prefix' => LaravelLocalization::setLocale(),
         Route::get('/json/contacts/{companyId}', 'App\Http\Controllers\Workflow\QuotesController@contactsJson')->name('quotes.json.contacts');
         Route::post('/json/address', 'App\Http\Controllers\Workflow\QuotesController@storeAddressJson')->name('quotes.json.address.store');
         Route::post('/json/contact', 'App\Http\Controllers\Workflow\QuotesController@storeContactJson')->name('quotes.json.contact.store');
+        Route::get('/json/templates', 'App\Http\Controllers\Workflow\QuotesController@templatesJson')->name('quotes.json.templates');
+        Route::post('/{id}/duplicate', 'App\Http\Controllers\Workflow\QuotesController@duplicate')->name('quotes.duplicate');
+        Route::post('/{id}/save-as-template', 'App\Http\Controllers\Workflow\QuotesController@saveAsTemplate')->name('quotes.save-template');
+        Route::delete('/{id}/template', 'App\Http\Controllers\Workflow\QuotesController@destroyTemplate')->name('quotes.template.destroy');
         Route::get('/{id}', 'App\Http\Controllers\Workflow\QuotesController@show')->name('quotes.show');
         Route::post('/{id}/json/statu', 'App\Http\Controllers\Workflow\QuotesController@changeStatusJson')->name('quotes.json.statu');
         //quote line
@@ -328,6 +334,8 @@ Route::group(['prefix' => LaravelLocalization::setLocale(),
         // JSON API for React QuoteLinesPage
         Route::get('/{quoteId}/lines/json', 'App\Http\Controllers\Workflow\QuoteLinesController@linesForQuoteJson')->name('quotes.lines.json.for-quote');
         Route::get('/{quoteId}/lines/json/select-data', 'App\Http\Controllers\Workflow\QuoteLinesController@selectDataForQuoteJson')->name('quotes.lines.json.select-data');
+        Route::get('/{quoteId}/lines/json/import-sources', 'App\Http\Controllers\Workflow\QuoteLinesController@importSourcesJson')->name('quotes.lines.json.import-sources');
+        Route::post('/{quoteId}/lines/json/import-from', 'App\Http\Controllers\Workflow\QuoteLinesController@importFromJson')->name('quotes.lines.json.import-from');
         Route::get('/{quoteId}/lines/json/price-list/{productId}', 'App\Http\Controllers\Workflow\QuoteLinesController@priceListForProductJson')->name('quotes.lines.json.price-list');
         Route::post('/{quoteId}/lines/json/store', 'App\Http\Controllers\Workflow\QuoteLinesController@storeLineJson')->name('quotes.lines.json.store');
         Route::post('/{quoteId}/lines/json/price-increase', 'App\Http\Controllers\Workflow\QuoteLinesController@priceIncreaseJson')->name('quotes.lines.json.price-increase');
@@ -343,6 +351,7 @@ Route::group(['prefix' => LaravelLocalization::setLocale(),
         Route::post('/{quoteId}/lines/json/{id}/create-product', 'App\Http\Controllers\Workflow\QuoteLinesController@createProductJson')->name('quotes.lines.json.create-product');
         Route::get('/{quoteId}/lines/json/{id}/tasks', 'App\Http\Controllers\Workflow\QuoteLinesController@tasksForLineJson')->name('quotes.lines.json.tasks');
         Route::patch('/{quoteId}/lines/json/{id}/calculated-price', 'App\Http\Controllers\Workflow\QuoteLinesController@toggleCalculatedPriceJson')->name('quotes.lines.json.calculated-price');
+        Route::patch('/{quoteId}/lines/json/{id}/presentation', 'App\Http\Controllers\Workflow\QuoteLinesController@presentationJson')->name('quotes.lines.json.presentation');
         Route::get('/{idQuote}/lines/{id}/detail-edit', 'App\Http\Controllers\Workflow\QuoteLinesController@detailEdit')->name('quotes.lines.detail.edit');
         Route::post('/{id}/delivery-simulation', 'App\Http\Controllers\Workflow\QuotesController@simulateDelivery')->name('quotes.delivery.simulation');
         //Project estimate
@@ -1277,9 +1286,7 @@ Route::group(['prefix' => LaravelLocalization::setLocale(),
         Route::group(['prefix' => 'tool'], function () {
             Route::get('/', 'App\Http\Controllers\Methods\ToolsController@index')->name('methods.tool');
             Route::get('/punch-designer', 'App\Http\Controllers\Methods\ToolsController@punchDesigner')->name('methods.tool.punch-designer');
-            Route::get('/library/{name}', 'App\Http\Controllers\Methods\ToolsController@library')
-                ->whereIn('name', ['press-brake-punches', 'press-brake-catalog'])->name('methods.tool.library');
-            Route::get('/catalog', 'App\Http\Controllers\Methods\ToolsController@catalog')->name('methods.tool.catalog');
+            Route::get('/catalog', 'App\Http\Controllers\Methods\ToolsController@punchDesigner')->name('methods.tool.catalog');
             Route::get('/configurator', 'App\Http\Controllers\Methods\ToolsController@configurator')->name('methods.tool.configurator');
             Route::post('/configurator', 'App\Http\Controllers\Methods\ToolsController@storeConfigured')->name('methods.tool.configurator.store');
             Route::post('/create', 'App\Http\Controllers\Methods\ToolsController@store')->name('methods.tool.create');

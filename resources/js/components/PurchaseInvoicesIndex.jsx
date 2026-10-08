@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { DataTable, Pagination, StatusBadge, StatusFilter, MobileFilters } from './table';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -21,8 +22,6 @@ const ALL_STATUSES = [1, 2, 3];
 const LS_COL_ORDER   = 'purchase_invoices_table_col_order';
 const LS_HIDDEN_COLS = 'purchase_invoices_table_hidden_cols';
 
-const DEFAULT_COL_ORDER = ['code', 'label', 'companie', 'lines_count', 'statu', 'created_at'];
-const TEXT_FILTER_COLS  = new Set(['code', 'label', 'companie']);
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -82,49 +81,6 @@ function niceMax(value) {
     if (value <= 0) return 100;
     const exp = Math.pow(10, Math.floor(Math.log10(value)));
     return Math.ceil(value / exp) * exp;
-}
-
-// ---------------------------------------------------------------------------
-// StatusBadge
-// ---------------------------------------------------------------------------
-
-function StatusBadge({ statu, trans }) {
-    const cfg   = STATUS_CONFIG[statu] ?? { badge: 'badge-secondary', label: String(statu) };
-    const label = trans[cfg.label] ?? cfg.label;
-    return <span className={`badge ${cfg.badge}`}>{label}</span>;
-}
-
-// ---------------------------------------------------------------------------
-// StatusFilter
-// ---------------------------------------------------------------------------
-
-function StatusFilter({ active, onToggle, trans }) {
-    return (
-        <div className="d-flex flex-wrap" style={{ gap: '0.25rem' }}>
-            {Object.entries(STATUS_CONFIG).map(([id, cfg]) => {
-                const sid      = Number(id);
-                const isActive = active.includes(sid);
-                return (
-                    <button
-                        key={sid}
-                        className={`btn btn-sm ${isActive ? cfg.badge.replace('badge-', 'btn-') : 'btn-outline-secondary'}`}
-                        onClick={() => onToggle(sid)}
-                    >
-                        {trans[cfg.label] ?? cfg.label}
-                    </button>
-                );
-            })}
-        </div>
-    );
-}
-
-// ---------------------------------------------------------------------------
-// SortIcon
-// ---------------------------------------------------------------------------
-
-function SortIcon({ field, sortField, sortAsc }) {
-    if (field !== sortField) return <i className="fas fa-sort text-muted ml-1" />;
-    return <i className={`fas fa-sort-${sortAsc ? 'up' : 'down'} ml-1`} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -328,254 +284,47 @@ function BarChart({ data, trans, currency, locale }) {
 }
 
 // ---------------------------------------------------------------------------
-// Column definitions
+// Table — colonnes déclarées, rendu par le DataTable partagé
 // ---------------------------------------------------------------------------
 
-function colDefs(trans) {
-    return {
-        code:        { label: trans.code        ?? 'Code',       sortField: 'code',        align: '',       bold: true },
-        label:       { label: trans.label       ?? 'Label',      sortField: 'label',       align: ''                   },
-        companie:    { label: trans.company     ?? 'Fournisseur', sortField: 'companie',   align: ''                   },
-        lines_count: { label: trans.lines_count ?? 'Lignes',     sortField: 'lines_count', align: 'center'             },
-        statu:       { label: trans.status      ?? 'Statut',     sortField: 'statu',       align: 'center'             },
-        created_at:  { label: trans.created_at  ?? 'Créé le',    sortField: 'created_at',  align: 'center'             },
-    };
+function purchaseInvoiceColumns(trans) {
+    return [
+        { key: 'code',        label: trans.code        ?? 'Code',        sortable: true, bold: true,
+          render: inv => <code>{inv.code}</code>, filter: 'text', mobile: 'title', mobileRender: inv => inv.code },
+        { key: 'label',       label: trans.label       ?? 'Label',       sortable: true,
+          filter: 'text', mobile: 'subtitle' },
+        { key: 'companie',    label: trans.company     ?? 'Fournisseur', sortable: true,
+          render: inv => inv.companie?.label ?? '—', filterValue: inv => inv.companie?.label,
+          filter: 'text', mobile: 'subtitle', mobileOrder: 1 },
+        { key: 'lines_count', label: trans.lines_count ?? 'Lignes',      sortable: true, align: 'center',
+          render: inv => <span className="badge badge-secondary">{inv.lines_count}</span> },
+        { key: 'statu',       label: trans.status      ?? 'Statut',      sortable: true, align: 'center',
+          render: inv => <StatusBadge statu={inv.statu} config={STATUS_CONFIG} trans={trans} />, mobile: 'badge' },
+        { key: 'created_at',  label: trans.created_at  ?? 'Créé le',     sortable: true, align: 'center',
+          filter: 'date', mobile: 'subtitle' },
+    ];
 }
 
-function readSavedColOrder() {
-    try {
-        const saved = JSON.parse(localStorage.getItem(LS_COL_ORDER));
-        if (Array.isArray(saved) && saved.every(c => DEFAULT_COL_ORDER.includes(c))) return saved;
-    } catch {}
-    return DEFAULT_COL_ORDER;
-}
-
-function readSavedHiddenCols() {
-    try {
-        const saved = JSON.parse(localStorage.getItem(LS_HIDDEN_COLS));
-        if (Array.isArray(saved)) return new Set(saved.filter(c => DEFAULT_COL_ORDER.includes(c)));
-    } catch {}
-    return new Set();
-}
-
-function matchesColFilter(inv, colId, value) {
-    const v = (value ?? '').toLowerCase().trim();
-    if (!v) return true;
-    switch (colId) {
-        case 'code':     return (inv.code ?? '').toLowerCase().includes(v);
-        case 'label':    return (inv.label ?? '').toLowerCase().includes(v);
-        case 'companie': return (inv.companie?.label ?? '').toLowerCase().includes(v);
-        default:         return true;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Table
-// ---------------------------------------------------------------------------
-
-function PurchaseInvoicesTable({ invoices, trans, onSort, sortField, sortAsc, locale }) {
-    const [colOrder,   setColOrder]   = useState(readSavedColOrder);
-    const [hiddenCols, setHiddenCols] = useState(readSavedHiddenCols);
-    const [colFilters, setColFilters] = useState({});
-    const [dragOver,   setDragOver]   = useState(null);
-    const dragCol = useRef(null);
-
-    const COLS        = colDefs(trans);
-    const visibleCols = colOrder.filter(c => !hiddenCols.has(c) && COLS[c]);
-
-    const hideCol = colId => {
-        const next = new Set(hiddenCols); next.add(colId);
-        setHiddenCols(next);
-        localStorage.setItem(LS_HIDDEN_COLS, JSON.stringify([...next]));
-    };
-    const showCol = colId => {
-        const next = new Set(hiddenCols); next.delete(colId);
-        setHiddenCols(next);
-        localStorage.setItem(LS_HIDDEN_COLS, JSON.stringify([...next]));
-    };
-
-    const onDragStart = colId => { dragCol.current = colId; };
-    const onDragOver  = (e, colId) => { e.preventDefault(); setDragOver(colId); };
-    const onDragLeave = () => setDragOver(null);
-    const onDrop      = targetId => {
-        const src = dragCol.current;
-        if (!src || src === targetId) { setDragOver(null); return; }
-        const next = [...colOrder];
-        next.splice(next.indexOf(targetId), 0, next.splice(next.indexOf(src), 1)[0]);
-        setColOrder(next);
-        localStorage.setItem(LS_COL_ORDER, JSON.stringify(next));
-        setDragOver(null);
-        dragCol.current = null;
-    };
-
-    const filtered  = invoices.filter(inv => visibleCols.every(colId => matchesColFilter(inv, colId, colFilters[colId] ?? '')));
-    const inputStyle = { fontSize: '0.72rem', height: '24px', padding: '1px 4px' };
-
-    const cellRender = (inv, colId) => {
-        switch (colId) {
-            case 'code':        return <code>{inv.code}</code>;
-            case 'label':       return inv.label;
-            case 'companie':    return inv.companie?.label ?? '—';
-            case 'lines_count': return <span className="badge badge-secondary">{inv.lines_count}</span>;
-            case 'statu':       return <StatusBadge statu={inv.statu} trans={trans} />;
-            case 'created_at':  return inv.created_at;
-            default: return '—';
-        }
-    };
-
+function PurchaseInvoicesTable({ invoices, trans, onSort, sortField, sortAsc }) {
     return (
-        <div>
-            {hiddenCols.size > 0 && (
-                <div className="mb-2 d-flex flex-wrap" style={{ gap: '4px' }}>
-                    {colOrder.filter(c => hiddenCols.has(c)).map(colId => (
-                        <button key={colId} type="button"
-                            className="btn btn-sm btn-outline-secondary"
-                            style={{ fontSize: '0.72rem', padding: '1px 8px' }}
-                            onClick={() => showCol(colId)}
-                            title="Réafficher la colonne"
-                        >
-                            + {COLS[colId]?.label ?? colId}
-                        </button>
-                    ))}
-                </div>
+        <DataTable
+            rows={invoices}
+            columns={purchaseInvoiceColumns(trans)}
+            trans={trans}
+            sortField={sortField}
+            sortAsc={sortAsc}
+            onSort={onSort}
+            storage={{ order: LS_COL_ORDER, hidden: LS_HIDDEN_COLS }}
+            emptyText={trans.no_data ?? 'Aucune donnée'}
+            rowHref={inv => inv.url}
+            rowActions={inv => (
+                <a href={inv.url} className="btn btn-sm btn-outline-primary" title={trans.view ?? 'Voir'}>
+                    <i className="fas fa-folder-open" />
+                </a>
             )}
-
-            <div className="table-responsive">
-                <table className="table table-hover table-sm">
-                    <thead>
-                        <tr>
-                            {visibleCols.map(colId => {
-                                const col      = COLS[colId];
-                                const alignCls = col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : '';
-                                const dropping = dragOver === colId;
-                                return (
-                                    <th key={colId}
-                                        className={alignCls}
-                                        draggable
-                                        onDragStart={() => onDragStart(colId)}
-                                        onDragOver={e => onDragOver(e, colId)}
-                                        onDragLeave={onDragLeave}
-                                        onDrop={() => onDrop(colId)}
-                                        style={{ borderLeft: dropping ? '2px solid #007bff' : undefined, cursor: 'grab', userSelect: 'none' }}
-                                    >
-                                        <div className="d-flex align-items-center" style={{ gap: '4px' }}>
-                                            {col.sortField ? (
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-sm btn-link p-0 text-dark font-weight-bold text-nowrap"
-                                                    style={{ fontSize: '0.82rem', textDecoration: 'none' }}
-                                                    onClick={() => onSort(col.sortField)}
-                                                >
-                                                    {col.label}
-                                                    <SortIcon field={col.sortField} sortField={sortField} sortAsc={sortAsc} />
-                                                </button>
-                                            ) : (
-                                                <span style={{ fontSize: '0.82rem' }}>{col.label}</span>
-                                            )}
-                                            <button type="button"
-                                                className="btn btn-sm p-0 text-muted ml-auto"
-                                                style={{ fontSize: '0.65rem', lineHeight: 1, opacity: 0.4 }}
-                                                onClick={() => hideCol(colId)}
-                                                title="Masquer"
-                                            >✕</button>
-                                        </div>
-                                        {TEXT_FILTER_COLS.has(colId) && (
-                                            <input
-                                                type="text"
-                                                className="form-control mt-1"
-                                                style={inputStyle}
-                                                placeholder="…"
-                                                value={colFilters[colId] ?? ''}
-                                                onChange={e => setColFilters(f => ({ ...f, [colId]: e.target.value }))}
-                                            />
-                                        )}
-                                    </th>
-                                );
-                            })}
-                            <th style={{ width: '80px' }}>{trans.action ?? 'Action'}</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {filtered.length === 0 ? (
-                            <tr>
-                                <td colSpan={visibleCols.length + 1} className="text-center text-muted py-4">
-                                    {trans.no_data ?? 'Aucune donnée'}
-                                </td>
-                            </tr>
-                        ) : filtered.map(inv => (
-                            <tr key={inv.id}>
-                                {visibleCols.map(colId => {
-                                    const col      = COLS[colId];
-                                    const alignCls = col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : '';
-                                    return (
-                                        <td key={colId} className={alignCls} style={{ fontWeight: col.bold ? 600 : undefined }}>
-                                            {cellRender(inv, colId)}
-                                        </td>
-                                    );
-                                })}
-                                <td>
-                                    <a href={inv.url} className="btn btn-sm btn-outline-primary" title={trans.view ?? 'Voir'}>
-                                        <i className="fas fa-folder-open" />
-                                    </a>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                    <tfoot>
-                        <tr>
-                            {visibleCols.map(colId => (
-                                <th key={colId}>{COLS[colId]?.label ?? colId}</th>
-                            ))}
-                            <th>{trans.action ?? 'Action'}</th>
-                        </tr>
-                    </tfoot>
-                </table>
-            </div>
-        </div>
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Pagination
-// ---------------------------------------------------------------------------
-
-function Pagination({ meta, onPage }) {
-    if (!meta || meta.last_page <= 1) return null;
-    const { current_page, last_page } = meta;
-
-    const pages = [];
-    for (let p = Math.max(1, current_page - 2); p <= Math.min(last_page, current_page + 2); p++) {
-        pages.push(p);
-    }
-
-    return (
-        <nav>
-            <ul className="pagination pagination-sm justify-content-center mb-0">
-                <li className={`page-item ${current_page === 1 ? 'disabled' : ''}`}>
-                    <button className="page-link" onClick={() => onPage(current_page - 1)}>&laquo;</button>
-                </li>
-                {pages[0] > 1 && (
-                    <>
-                        <li className="page-item"><button className="page-link" onClick={() => onPage(1)}>1</button></li>
-                        {pages[0] > 2 && <li className="page-item disabled"><span className="page-link">…</span></li>}
-                    </>
-                )}
-                {pages.map(p => (
-                    <li key={p} className={`page-item ${p === current_page ? 'active' : ''}`}>
-                        <button className="page-link" onClick={() => onPage(p)}>{p}</button>
-                    </li>
-                ))}
-                {pages[pages.length - 1] < last_page && (
-                    <>
-                        {pages[pages.length - 1] < last_page - 1 && <li className="page-item disabled"><span className="page-link">…</span></li>}
-                        <li className="page-item"><button className="page-link" onClick={() => onPage(last_page)}>{last_page}</button></li>
-                    </>
-                )}
-                <li className={`page-item ${current_page === last_page ? 'disabled' : ''}`}>
-                    <button className="page-link" onClick={() => onPage(current_page + 1)}>&raquo;</button>
-                </li>
-            </ul>
-        </nav>
+            actionsWidth={80}
+            actionsHeader={trans.action ?? 'Action'}
+        />
     );
 }
 
@@ -686,7 +435,7 @@ export default function PurchaseInvoicesIndex({
                 </div>
 
                 {/* Table */}
-                <div className="col-md-9">
+                <div className="col-md-9 order-first order-md-0">
                     <div className="card">
                         <div className="card-body pb-2">
                             <div className="row align-items-end">
@@ -712,7 +461,9 @@ export default function PurchaseInvoicesIndex({
                                     </div>
                                 </div>
                                 <div className="col-md-7">
-                                    <StatusFilter active={activeStatuses} onToggle={handleStatusToggle} trans={trans} />
+                                    <MobileFilters count={activeStatuses.length === ALL_STATUSES.length ? 0 : activeStatuses.length} trans={trans}>
+                                        <StatusFilter config={STATUS_CONFIG} selected={activeStatuses} onToggle={handleStatusToggle} trans={trans} />
+                                    </MobileFilters>
                                 </div>
                             </div>
                         </div>
@@ -742,7 +493,7 @@ export default function PurchaseInvoicesIndex({
                                 <small className="text-muted">
                                     {meta.total} {trans.results ?? 'résultats'}
                                 </small>
-                                <Pagination meta={meta} onPage={handlePage} />
+                                <Pagination meta={meta} around={2} boundaries ulClassName="pagination pagination-sm justify-content-center mb-0" onPage={handlePage} />
                             </div>
                         )}
                     </div>

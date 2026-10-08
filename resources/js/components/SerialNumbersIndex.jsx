@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { DataTable, Pagination, StatusBadge, StatusFilter, MobileFilters } from './table';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -13,6 +14,9 @@ const STATUS_CONFIG = {
 };
 
 const ALL_STATUSES = [1, 2, 3, 4, 5];
+
+const LS_COL_ORDER   = 'serial_numbers_table_col_order';
+const LS_HIDDEN_COLS = 'serial_numbers_table_hidden_cols';
 
 function csrfToken() {
     return document.querySelector('meta[name="csrf-token"]')?.content ?? '';
@@ -87,186 +91,71 @@ function KPICards({ kpi, trans }) {
 // Status Badge
 // ---------------------------------------------------------------------------
 
-function StatusBadge({ status, trans }) {
-    const cfg = STATUS_CONFIG[status] ?? { badge: 'badge-secondary', label: 'unknown' };
-    return <span className={`badge ${cfg.badge}`}>{trans[cfg.label] ?? status}</span>;
-}
-
 // ---------------------------------------------------------------------------
 // Status Filter
 // ---------------------------------------------------------------------------
-
-function StatusFilter({ selected, onChange, trans }) {
-    const toggle = (id) => {
-        const next = selected.includes(id)
-            ? selected.filter(s => s !== id)
-            : [...selected, id];
-        onChange(next.length ? next : [id]);
-    };
-
-    return (
-        <div className="d-flex flex-wrap" style={{ gap: '0.25rem' }}>
-            {ALL_STATUSES.map(id => {
-                const cfg    = STATUS_CONFIG[id];
-                const active = selected.includes(id);
-                return (
-                    <button
-                        key={id}
-                        className={`btn btn-sm ${active ? cfg.badge.replace('badge-', 'btn-') : 'btn-outline-secondary'}`}
-                        onClick={() => toggle(id)}
-                    >
-                        {trans[cfg.label] ?? id}
-                    </button>
-                );
-            })}
-        </div>
-    );
-}
 
 // ---------------------------------------------------------------------------
 // Sort Icon
 // ---------------------------------------------------------------------------
 
-function SortIcon({ field, sortField, sortAsc }) {
-    if (field !== sortField) return <i className="fas fa-sort text-muted ml-1" />;
-    return <i className={`fas fa-sort-${sortAsc ? 'up' : 'down'} ml-1`} />;
-}
-
 // ---------------------------------------------------------------------------
 // Serial Numbers Table
 // ---------------------------------------------------------------------------
 
-function SerialNumbersTable({ items, sortField, sortAsc, onSort, trans }) {
-    const cols = [
-        { id: 'serial_number', label: trans.serial_number, sortField: 'serial_number' },
-        { id: 'product',       label: trans.product,       sortField: null },
-        { id: 'order',         label: trans.order,         sortField: null },
-        { id: 'task',          label: trans.task,          sortField: null },
-        { id: 'receipt',       label: trans.po_receipt,    sortField: null },
-        { id: 'status',        label: trans.status,        sortField: 'status' },
-        { id: 'created_at',    label: trans.created_at,    sortField: 'created_at' },
-        { id: 'trace',         label: trans.trace,         sortField: null },
+function serialColumns(trans) {
+    return [
+        { key: 'serial_number', label: trans.serial_number, sortable: true,
+          render: sn => <code>{sn.serial_number}</code>, filter: 'text', mobile: 'title', mobileRender: sn => sn.serial_number },
+        { key: 'product',       label: trans.product,
+          render: sn => (sn.product ? (
+              <span>
+                  <a href={sn.product.url} className="btn btn-xs btn-info mr-1"><i className="fas fa-eye" /></a>
+                  {sn.product.label}
+              </span>
+          ) : '—'),
+          filterValue: sn => sn.product?.label, filter: 'text', mobile: 'subtitle', mobileRender: sn => sn.product?.label },
+        { key: 'order',         label: trans.order,
+          render: sn => (sn.order ? (
+              <span>
+                  <a href={sn.order.url} className="btn btn-xs btn-primary mr-1"><i className="fas fa-folder" /></a>
+                  <code>{sn.order.code}</code>
+              </span>
+          ) : '—'),
+          filterValue: sn => sn.order?.code, filter: 'text', mobile: 'subtitle', mobileRender: sn => sn.order?.code },
+        { key: 'task',          label: trans.task,
+          render: sn => (sn.task ? <a href={sn.task.url} className="btn btn-xs btn-success">{trans.view}</a> : '—') },
+        { key: 'receipt',       label: trans.po_receipt,
+          render: sn => (sn.receipt ? (
+              <a href={sn.receipt.url} className="btn btn-xs btn-primary">
+                  <i className="fas fa-folder mr-1" /><code>{sn.receipt.code}</code>
+              </a>
+          ) : '—'),
+          filterValue: sn => sn.receipt?.code, filter: 'text', mobile: 'subtitle', mobileRender: sn => sn.receipt?.code },
+        { key: 'status',        label: trans.status,        sortable: true,
+          render: sn => <StatusBadge statu={sn.status} config={STATUS_CONFIG} trans={trans} fallback="value" />, mobile: 'badge' },
+        { key: 'created_at',    label: trans.created_at,    sortable: true, nowrap: true,
+          filter: 'date', filterValue: sn => sn.created_date },
+        { key: 'trace',         label: trans.trace,
+          render: sn => <a href={sn.trace_url} className="btn btn-xs btn-primary">{trans.trace}</a> },
     ];
-
-    return (
-        <div className="table-responsive">
-            <table className="table table-hover table-sm">
-                <thead>
-                    <tr>
-                        {cols.map(col => (
-                            <th
-                                key={col.id}
-                                style={col.sortField ? { cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' } : { whiteSpace: 'nowrap' }}
-                                onClick={col.sortField ? () => onSort(col.sortField) : undefined}
-                            >
-                                {col.label}
-                                {col.sortField && (
-                                    <SortIcon field={col.sortField} sortField={sortField} sortAsc={sortAsc} />
-                                )}
-                            </th>
-                        ))}
-                    </tr>
-                </thead>
-                <tbody>
-                    {items.length === 0 && (
-                        <tr>
-                            <td colSpan={cols.length} className="text-center text-muted py-3">
-                                {trans.no_results}
-                            </td>
-                        </tr>
-                    )}
-                    {items.map(sn => (
-                        <tr key={sn.id}>
-                            <td><code>{sn.serial_number}</code></td>
-                            <td>
-                                {sn.product ? (
-                                    <span>
-                                        <a href={sn.product.url} className="btn btn-xs btn-info mr-1">
-                                            <i className="fas fa-eye" />
-                                        </a>
-                                        {sn.product.label}
-                                    </span>
-                                ) : '—'}
-                            </td>
-                            <td>
-                                {sn.order ? (
-                                    <span>
-                                        <a href={sn.order.url} className="btn btn-xs btn-primary mr-1">
-                                            <i className="fas fa-folder" />
-                                        </a>
-                                        <code>{sn.order.code}</code>
-                                    </span>
-                                ) : '—'}
-                            </td>
-                            <td>
-                                {sn.task ? (
-                                    <a href={sn.task.url} className="btn btn-xs btn-success">
-                                        {trans.view}
-                                    </a>
-                                ) : '—'}
-                            </td>
-                            <td>
-                                {sn.receipt ? (
-                                    <a href={sn.receipt.url} className="btn btn-xs btn-primary">
-                                        <i className="fas fa-folder mr-1" />
-                                        <code>{sn.receipt.code}</code>
-                                    </a>
-                                ) : '—'}
-                            </td>
-                            <td>
-                                <StatusBadge status={sn.status} trans={trans} />
-                            </td>
-                            <td style={{ whiteSpace: 'nowrap' }}>{sn.created_at}</td>
-                            <td>
-                                <a href={sn.trace_url} className="btn btn-xs btn-primary">
-                                    {trans.trace}
-                                </a>
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>
-    );
 }
 
-// ---------------------------------------------------------------------------
-// Pagination
-// ---------------------------------------------------------------------------
-
-function Pagination({ meta, onPageChange }) {
-    if (!meta || meta.last_page <= 1) return null;
-
-    const pages = [];
-    const current = meta.current_page;
-    const last    = meta.last_page;
-
-    for (let p = 1; p <= last; p++) {
-        if (p === 1 || p === last || (p >= current - 2 && p <= current + 2)) {
-            pages.push(p);
-        } else if (pages[pages.length - 1] !== '...') {
-            pages.push('...');
-        }
-    }
-
+function SerialNumbersTable({ items, sortField, sortAsc, onSort, trans }) {
     return (
-        <nav>
-            <ul className="pagination pagination-sm justify-content-end">
-                <li className={`page-item ${current === 1 ? 'disabled' : ''}`}>
-                    <button className="page-link" onClick={() => onPageChange(current - 1)}>«</button>
-                </li>
-                {pages.map((p, i) => (
-                    p === '...'
-                        ? <li key={`dots-${i}`} className="page-item disabled"><span className="page-link">…</span></li>
-                        : <li key={p} className={`page-item ${p === current ? 'active' : ''}`}>
-                            <button className="page-link" onClick={() => onPageChange(p)}>{p}</button>
-                        </li>
-                ))}
-                <li className={`page-item ${current === last ? 'disabled' : ''}`}>
-                    <button className="page-link" onClick={() => onPageChange(current + 1)}>»</button>
-                </li>
-            </ul>
-        </nav>
+        <DataTable
+            rows={items}
+            columns={serialColumns(trans)}
+            trans={trans}
+            sortField={sortField}
+            sortAsc={sortAsc}
+            onSort={onSort}
+            storage={{ order: LS_COL_ORDER, hidden: LS_HIDDEN_COLS }}
+            unsortableIcon={false}
+            unsortableCursor="default"
+            actionsColumn={false}
+            rowHref={sn => sn.trace_url}
+        />
     );
 }
 
@@ -394,7 +283,9 @@ function ListTab({ endpoints, trans, productId = null }) {
                         onChange={e => handleSearch(e.target.value)}
                     />
                 </div>
-                <StatusFilter selected={statuses} onChange={handleStatusChange} trans={trans} />
+                <MobileFilters count={statuses.length === ALL_STATUSES.length ? 0 : statuses.length} trans={trans}>
+                    <StatusFilter config={STATUS_CONFIG} ids={ALL_STATUSES} selected={statuses} onChange={handleStatusChange} trans={trans} allowEmpty={false} fallback="value" />
+                </MobileFilters>
                 <div className="flex-grow-1" />
                 {meta && (
                     <small className="text-muted">{meta.total} {trans.total_serial_numbers}</small>
@@ -417,7 +308,7 @@ function ListTab({ endpoints, trans, productId = null }) {
                 />
             )}
 
-            <Pagination meta={meta} onPageChange={setPage} />
+            <Pagination meta={meta} around={2} boundaries ulClassName="pagination pagination-sm justify-content-end" onPage={setPage} />
         </div>
     );
 }

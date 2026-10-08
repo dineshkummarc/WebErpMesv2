@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import QuoteRateWidget from './dashboard/widgets/QuoteRateWidget.jsx';
+import { DataTable, Pagination, StatusBadge, StatusFilter, MobileFilters } from './table';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -359,326 +360,59 @@ function DashboardTab({ kpi, chartData, topCustomers, quotesByUser, trans }) {
 // Status Badge
 // ---------------------------------------------------------------------------
 
-function StatusBadge({ statu, trans }) {
-    const cfg = STATUS_CONFIG[statu] ?? { badge: 'badge-secondary', label: 'unknown' };
-    return <span className={`badge ${cfg.badge}`}>{trans[cfg.label] ?? statu}</span>;
-}
-
 // ---------------------------------------------------------------------------
 // Status Filter
 // ---------------------------------------------------------------------------
 
 const ALL_STATUSES = [1, 2, 3, 4, 5, 6];
 
-function StatusFilter({ selected, onChange, trans }) {
-    const toggle = (id) => {
-        const next = selected.includes(id)
-            ? selected.filter(s => s !== id)
-            : [...selected, id];
-        onChange(next.length ? next : [id]);
-    };
-
-    return (
-        <div className="d-flex flex-wrap" style={{ gap: '0.25rem' }}>
-            {ALL_STATUSES.map(id => {
-                const cfg    = STATUS_CONFIG[id];
-                const active = selected.includes(id);
-                return (
-                    <button
-                        key={id}
-                        className={`btn btn-sm ${active ? cfg.badge.replace('badge-', 'btn-') : 'btn-outline-secondary'}`}
-                        onClick={() => toggle(id)}
-                    >
-                        {trans[cfg.label] ?? id}
-                    </button>
-                );
-            })}
-        </div>
-    );
-}
-
 // ---------------------------------------------------------------------------
-// Quotes Table — with drag-and-drop column reorder + per-column filters
+// Quotes Table — colonnes déclarées, rendu par le DataTable partagé
 // ---------------------------------------------------------------------------
 
 const LS_COL_ORDER     = 'quotes_table_col_order';
 const LS_HIDDEN_COLS   = 'quotes_table_hidden_cols';
-const DEFAULT_COL_ORDER = ['code', 'label', 'client', 'contact', 'validity_date', 'status', 'lines', 'created_at', 'total'];
-const TEXT_FILTER_COLS  = new Set(['code', 'label', 'client', 'contact']);
-const DATE_RANGE_COLS   = new Set(['validity_date', 'created_at']);
 
-// Parse "dd/mm/yyyy" → "yyyy-mm-dd" for date comparison
-function dmyToISO(str) {
-    if (!str || !str.includes('/')) return str ?? '';
-    const [d, m, y] = str.split('/');
-    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-}
-
-function SortIcon({ field, sortField, sortAsc }) {
-    if (field !== sortField) return <i className="fas fa-sort text-muted ml-1" />;
-    return <i className={`fas fa-sort-${sortAsc ? 'up' : 'down'} ml-1`} />;
-}
-
-function colDefs(trans) {
-    return {
-        code:          { label: trans.code,          sortField: 'code',               align: '',       render: q => <code>{q.code}</code> },
-        label:         { label: trans.label,         sortField: 'label',              align: '',       render: q => q.label },
-        client:        { label: trans.client,        sortField: 'companie',           align: '',       render: q => q.companie?.label ?? '—' },
-        contact:       { label: trans.contact,       sortField: 'contact',            align: '',       render: q => q.contact?.name ?? '—' },
-        validity_date: { label: trans.validity_date, sortField: 'validity_date',      align: '',       render: q => formatDate(q.validity_date, trans.locale) },
-        status:        { label: trans.status,        sortField: 'statu',              align: '',       render: q => <StatusBadge statu={q.statu} trans={trans} /> },
-        lines:         { label: trans.lines,         sortField: 'quote_lines_count',  align: 'center', render: q => <span className="badge badge-secondary">{q.quote_lines_count}</span> },
-        created_at:    { label: trans.created_at,   sortField: 'created_at',         align: '',       render: q => q.created_at },
-        total:         { label: trans.total,         sortField: 'total_amount',       align: 'right',  bold: true,
-                         render: q => q.total_amount > 0
-                             ? formatCurrency(q.total_amount, trans.currency, trans.locale)
-                             : <span className="text-muted">—</span> },
-    };
-}
-
-function matchesColFilter(q, colId, value) {
-    if (DATE_RANGE_COLS.has(colId)) {
-        const { from, to } = value ?? {};
-        const iso = colId === 'validity_date' ? (q.validity_date ?? '') : dmyToISO(q.created_at ?? '');
-        if (!iso) return true;
-        if (from && iso < from) return false;
-        if (to   && iso > to)   return false;
-        return true;
-    }
-    const v = (value ?? '').toLowerCase().trim();
-    if (!v) return true;
-    switch (colId) {
-        case 'code':    return (q.code ?? '').toLowerCase().includes(v);
-        case 'label':   return (q.label ?? '').toLowerCase().includes(v);
-        case 'client':  return (q.companie?.label ?? '').toLowerCase().includes(v);
-        case 'contact': return (q.contact?.name ?? '').toLowerCase().includes(v);
-        default:        return true;
-    }
-}
-
-function readSavedColOrder() {
-    try {
-        const saved = JSON.parse(localStorage.getItem(LS_COL_ORDER));
-        if (Array.isArray(saved) && saved.every(c => DEFAULT_COL_ORDER.includes(c))) return saved;
-    } catch {}
-    return DEFAULT_COL_ORDER;
-}
-
-function readSavedHiddenCols() {
-    try {
-        const saved = JSON.parse(localStorage.getItem(LS_HIDDEN_COLS));
-        if (Array.isArray(saved)) return new Set(saved.filter(c => DEFAULT_COL_ORDER.includes(c)));
-    } catch {}
-    return new Set();
+function quoteColumns(trans) {
+    return [
+        { key: 'code',          label: trans.code,          sortable: true,
+          render: q => <code>{q.code}</code>, filter: 'text', mobile: 'title', mobileRender: q => q.code },
+        { key: 'label',         label: trans.label,         sortable: true,
+          filter: 'text', mobile: 'subtitle' },
+        { key: 'client',        label: trans.client,        sortable: 'companie',
+          render: q => q.companie?.label ?? '—', filterValue: q => q.companie?.label, filter: 'text', mobile: 'subtitle', mobileOrder: 1 },
+        { key: 'contact',       label: trans.contact,       sortable: true,
+          render: q => q.contact?.name ?? '—', filterValue: q => q.contact?.name, filter: 'text' },
+        { key: 'validity_date', label: trans.validity_date, sortable: true,
+          render: q => formatDate(q.validity_date, trans.locale), filter: 'date' },
+        { key: 'status',        label: trans.status,        sortable: 'statu',
+          render: q => <StatusBadge statu={q.statu} config={STATUS_CONFIG} trans={trans} fallback="value" />, mobile: 'badge' },
+        { key: 'lines',         label: trans.lines,         sortable: 'quote_lines_count', align: 'center',
+          render: q => <span className="badge badge-secondary">{q.quote_lines_count}</span> },
+        { key: 'created_at',    label: trans.created_at,    sortable: true,
+          filter: 'date' },
+        { key: 'total',         label: trans.total,         sortable: 'total_amount', align: 'right', bold: true,
+          render: q => (q.total_amount > 0
+              ? formatCurrency(q.total_amount, trans.currency, trans.locale)
+              : <span className="text-muted">—</span>),
+          total: { value: q => q.total_amount ?? 0, format: sum => formatCurrency(sum, trans.currency, trans.locale) },
+          mobile: 'amount', mobileRender: q => (q.total_amount > 0 ? formatCurrency(q.total_amount, trans.currency, trans.locale) : null) },
+    ];
 }
 
 function QuotesTable({ quotes, loading, sortField, sortAsc, onSort, trans }) {
-    const [colOrder,   setColOrder]   = useState(readSavedColOrder);
-    const [hiddenCols, setHiddenCols] = useState(readSavedHiddenCols);
-    const [colFilters, setColFilters] = useState({});
-    const [dragOver,   setDragOver]   = useState(null);
-    const dragCol = useRef(null);
-
-    const COLS       = colDefs(trans);
-    const visibleCols = colOrder.filter(c => !hiddenCols.has(c));
-
-    const hideCol = (colId) => {
-        const next = new Set(hiddenCols);
-        next.add(colId);
-        setHiddenCols(next);
-        localStorage.setItem(LS_HIDDEN_COLS, JSON.stringify([...next]));
-    };
-
-    const showCol = (colId) => {
-        const next = new Set(hiddenCols);
-        next.delete(colId);
-        setHiddenCols(next);
-        localStorage.setItem(LS_HIDDEN_COLS, JSON.stringify([...next]));
-    };
-
-    // Apply per-column filters on top of whatever quotes were passed in
-    const filtered = quotes.filter(q =>
-        visibleCols.every(colId => matchesColFilter(q, colId, colFilters[colId] ?? ''))
-    );
-
-    // ---- drag handlers ----
-    const onDragStart = (colId) => { dragCol.current = colId; };
-    const onDragOver  = (e, colId) => { e.preventDefault(); setDragOver(colId); };
-    const onDragLeave = () => setDragOver(null);
-    const onDrop      = (targetId) => {
-        const src = dragCol.current;
-        if (!src || src === targetId) { setDragOver(null); return; }
-        const next = [...colOrder];
-        next.splice(next.indexOf(targetId), 0, next.splice(next.indexOf(src), 1)[0]);
-        setColOrder(next);
-        localStorage.setItem(LS_COL_ORDER, JSON.stringify(next));
-        setDragOver(null);
-        dragCol.current = null;
-    };
-
-    const pageTotal  = filtered.reduce((s, q) => s + (q.total_amount ?? 0), 0);
-    const totalIdx   = visibleCols.indexOf('total');
-    const inputStyle = { fontSize: '0.72rem', height: '24px', padding: '1px 4px' };
-
     return (
-        <div>
-            {/* ── hidden-column restore chips ── */}
-            {hiddenCols.size > 0 && (
-                <div className="mb-2 d-flex flex-wrap" style={{ gap: '4px' }}>
-                    {colOrder.filter(c => hiddenCols.has(c)).map(colId => (
-                        <button
-                            key={colId}
-                            type="button"
-                            className="btn btn-sm btn-outline-secondary"
-                            style={{ fontSize: '0.72rem', padding: '1px 8px' }}
-                            onClick={() => showCol(colId)}
-                            title="Réafficher la colonne"
-                        >
-                            + {COLS[colId].label}
-                        </button>
-                    ))}
-                </div>
-            )}
-
-            <div className="table-responsive">
-                <table className="table table-hover table-sm">
-                    <thead>
-                        {/* ── row 1 : column headers (draggable + hide button) ── */}
-                        <tr>
-                            {visibleCols.map(colId => {
-                                const col      = COLS[colId];
-                                const alignCls = col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : '';
-                                const dropping = dragOver === colId;
-                                return (
-                                    <th
-                                        key={colId}
-                                        className={alignCls}
-                                        draggable
-                                        style={{
-                                            cursor:     'pointer',
-                                            whiteSpace: 'nowrap',
-                                            userSelect: 'none',
-                                            borderLeft: dropping ? '3px solid #007bff' : undefined,
-                                            background: dropping ? '#e8f0fe' : undefined,
-                                        }}
-                                        onDragStart={() => onDragStart(colId)}
-                                        onDragOver={(e) => onDragOver(e, colId)}
-                                        onDragLeave={onDragLeave}
-                                        onDrop={() => onDrop(colId)}
-                                        onClick={() => onSort(col.sortField)}
-                                    >
-                                        <i className="fas fa-grip-vertical text-muted mr-1" style={{ fontSize: '0.65rem', opacity: 0.4 }} />
-                                        {col.label}
-                                        <SortIcon field={col.sortField} sortField={sortField} sortAsc={sortAsc} />
-                                        <span
-                                            role="button"
-                                            aria-label="Masquer la colonne"
-                                            style={{ marginLeft: '6px', opacity: 0.4, fontSize: '0.8rem', lineHeight: 1 }}
-                                            className="text-danger"
-                                            onClick={e => { e.stopPropagation(); hideCol(colId); }}
-                                            onMouseEnter={e => e.currentTarget.style.opacity = 1}
-                                            onMouseLeave={e => e.currentTarget.style.opacity = 0.4}
-                                        >
-                                            ×
-                                        </span>
-                                    </th>
-                                );
-                            })}
-                            <th style={{ width: 36 }} />
-                        </tr>
-                        {/* ── row 2 : per-column filter inputs ── */}
-                        <tr>
-                            {visibleCols.map(colId => (
-                                <th key={colId} style={{ padding: '2px 4px', fontWeight: 'normal' }}>
-                                    {TEXT_FILTER_COLS.has(colId) && (
-                                        <input
-                                            type="text"
-                                            className="form-control form-control-sm"
-                                            style={inputStyle}
-                                            placeholder="⌕"
-                                            value={colFilters[colId] ?? ''}
-                                            onChange={e => setColFilters(prev => ({ ...prev, [colId]: e.target.value }))}
-                                        />
-                                    )}
-                                    {DATE_RANGE_COLS.has(colId) && (
-                                        <div style={{ display: 'flex', gap: '2px', minWidth: '200px' }}>
-                                            <input
-                                                type="date"
-                                                className="form-control form-control-sm"
-                                                style={{ ...inputStyle, flex: 1, minWidth: 0 }}
-                                                title="Du"
-                                                value={(colFilters[colId] ?? {}).from ?? ''}
-                                                onChange={e => setColFilters(prev => ({
-                                                    ...prev,
-                                                    [colId]: { ...(prev[colId] ?? {}), from: e.target.value },
-                                                }))}
-                                            />
-                                            <input
-                                                type="date"
-                                                className="form-control form-control-sm"
-                                                style={{ ...inputStyle, flex: 1, minWidth: 0 }}
-                                                title="Au"
-                                                value={(colFilters[colId] ?? {}).to ?? ''}
-                                                onChange={e => setColFilters(prev => ({
-                                                    ...prev,
-                                                    [colId]: { ...(prev[colId] ?? {}), to: e.target.value },
-                                                }))}
-                                            />
-                                        </div>
-                                    )}
-                                </th>
-                            ))}
-                            <th />
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {loading ? (
-                            <tr><td colSpan={visibleCols.length + 1} className="text-center py-4"><i className="fas fa-spinner fa-spin" /></td></tr>
-                        ) : filtered.length === 0 ? (
-                            <tr><td colSpan={visibleCols.length + 1} className="text-center text-muted py-3">{trans.no_results}</td></tr>
-                        ) : null}
-                        {!loading && filtered.map(q => (
-                            <tr key={q.id}>
-                                {visibleCols.map(colId => {
-                                    const col      = COLS[colId];
-                                    const alignCls = col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : '';
-                                    return (
-                                        <td
-                                            key={colId}
-                                            className={`${alignCls}${col.bold ? ' font-weight-bold' : ''}`}
-                                            style={(col.align === 'right' || col.bold) ? { whiteSpace: 'nowrap' } : {}}
-                                        >
-                                            {col.render(q)}
-                                        </td>
-                                    );
-                                })}
-                                <td>
-                                    <a href={q.url} className="btn btn-xs btn-info">
-                                        <i className="fas fa-eye" />
-                                    </a>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                    {filtered.length > 0 && (
-                        <tfoot>
-                            <tr className="font-weight-bold bg-light">
-                                {visibleCols.map((colId, i) => {
-                                    if (colId === 'total') return (
-                                        <td key={colId} className="text-right" style={{ whiteSpace: 'nowrap' }}>
-                                            {formatCurrency(pageTotal, trans.currency, trans.locale)}
-                                        </td>
-                                    );
-                                    if (i === totalIdx - 1) return <td key={colId} className="text-right">{trans.total}</td>;
-                                    return <td key={colId} />;
-                                })}
-                                <td />
-                            </tr>
-                        </tfoot>
-                    )}
-                </table>
-            </div>
-        </div>
+        <DataTable
+            rows={quotes}
+            columns={quoteColumns(trans)}
+            loading={loading}
+            trans={trans}
+            sortField={sortField}
+            sortAsc={sortAsc}
+            onSort={onSort}
+            storage={{ order: LS_COL_ORDER, hidden: LS_HIDDEN_COLS }}
+            rowHref={q => q.url}
+        />
     );
 }
 
@@ -699,7 +433,7 @@ function QuoteCards({ quotes, loading, trans }) {
                     <div className="card h-100">
                         <div className="card-header py-1 px-2 d-flex justify-content-between align-items-center">
                             <code className="small">{q.code}</code>
-                            <StatusBadge statu={q.statu} trans={trans} />
+                            <StatusBadge statu={q.statu} config={STATUS_CONFIG} trans={trans} fallback="value" />
                         </div>
                         <div className="card-body py-2 px-2">
                             <p className="mb-1 font-weight-bold">{q.label}</p>
@@ -757,32 +491,6 @@ function KanbanBoard({ quotes, trans }) {
                 );
             })}
         </div>
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Pagination
-// ---------------------------------------------------------------------------
-
-function Pagination({ meta, onPageChange }) {
-    if (!meta || meta.last_page <= 1) return null;
-    const pages = Array.from({ length: meta.last_page }, (_, i) => i + 1);
-    return (
-        <nav>
-            <ul className="pagination pagination-sm justify-content-end">
-                <li className={`page-item ${meta.current_page === 1 ? 'disabled' : ''}`}>
-                    <button className="page-link" onClick={() => onPageChange(meta.current_page - 1)}>«</button>
-                </li>
-                {pages.map(p => (
-                    <li key={p} className={`page-item ${p === meta.current_page ? 'active' : ''}`}>
-                        <button className="page-link" onClick={() => onPageChange(p)}>{p}</button>
-                    </li>
-                ))}
-                <li className={`page-item ${meta.current_page === meta.last_page ? 'disabled' : ''}`}>
-                    <button className="page-link" onClick={() => onPageChange(meta.current_page + 1)}>»</button>
-                </li>
-            </ul>
-        </nav>
     );
 }
 
@@ -998,8 +706,9 @@ function CreateContactSubModal({ show, onClose, companiesId, storeUrl, onCreated
 // Create Quote Modal
 // ---------------------------------------------------------------------------
 
-function CreateModal({ show, onClose, endpoints, trans }) {
+function CreateModal({ show, onClose, endpoints, trans, initialTemplateId = null }) {
     const [selectData, setSelectData]         = useState(null);
+    const [templates, setTemplates]           = useState([]);
     const [addresses, setAddresses]           = useState([]);
     const [contacts, setContacts]             = useState([]);
     const [errors, setErrors]                 = useState({});
@@ -1020,7 +729,38 @@ function CreateModal({ show, onClose, endpoints, trans }) {
         user_id:                          '',
         validity_date:                    '',
         comment:                          '',
+        template_id:                      '',
     });
+
+    // Trames proposées comme point de départ ; la liste est courte, on la charge en entier.
+    useEffect(() => {
+        if (!show || !endpoints.templates) return;
+        apiFetch(endpoints.templates)
+            .then(data => {
+                const list = data.data ?? [];
+                setTemplates(list);
+                const preset = list.find(t => String(t.id) === String(initialTemplateId ?? ''));
+                if (preset) {
+                    setForm(f => ({
+                        ...f,
+                        template_id: String(preset.id),
+                        label: !f.label || f.label === '-' ? preset.label : f.label,
+                    }));
+                }
+            })
+            .catch(() => setTemplates([]));
+    }, [show, initialTemplateId]);
+
+    const handleTemplateChange = (templateId) => {
+        const previous = templates.find(t => String(t.id) === String(form.template_id));
+        const next     = templates.find(t => String(t.id) === String(templateId));
+        setForm(f => ({
+            ...f,
+            template_id: templateId,
+            // Le libellé suit la trame tant que l'utilisateur ne l'a pas personnalisé.
+            label: next && (!f.label || f.label === '-' || f.label === previous?.label) ? next.label : f.label,
+        }));
+    };
 
     useEffect(() => {
         if (!show || selectData) return;
@@ -1130,6 +870,22 @@ function CreateModal({ show, onClose, endpoints, trans }) {
                                 {!selectData && <div className="text-center py-4"><i className="fas fa-spinner fa-spin fa-2x" /></div>}
                                 {selectData && (
                                     <div className="card card-body">
+                                        {templates.length > 0 && (
+                                            <div className="form-row">
+                                                <div className="form-group col-md-12">
+                                                    <label><i className="fas fa-layer-group mr-1 text-info" />{trans.start_from_template}</label>
+                                                    <select className="form-control" value={form.template_id} onChange={e => handleTemplateChange(e.target.value)}>
+                                                        <option value="">{trans.no_template}</option>
+                                                        {templates.map(t => (
+                                                            <option key={t.id} value={t.id}>
+                                                                {t.label} ({t.quote_lines_count} {String(trans.lines ?? '').toLowerCase()})
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                    {fieldError('template_id')}
+                                                </div>
+                                            </div>
+                                        )}
                                         <div className="form-row">
                                             <div className="form-group col-md-4">
                                                 <label>{trans.code}</label>
@@ -1306,7 +1062,7 @@ function saveFilters(filters) {
 // List Tab
 // ---------------------------------------------------------------------------
 
-function ListTab({ endpoints, trans, companieId }) {
+function ListTab({ endpoints, trans, companieId, initialTemplateId = null }) {
     const saved = loadFilters();
 
     const [quotes, setQuotes]         = useState([]);
@@ -1318,7 +1074,7 @@ function ListTab({ endpoints, trans, companieId }) {
     const [sortAsc, setSortAsc]       = useState(saved?.sortAsc   ?? false);
     const [page, setPage]             = useState(1);
     const [viewType, setViewType]     = useState(saved?.viewType  ?? 'table');
-    const [showModal, setShowModal]   = useState(false);
+    const [showModal, setShowModal]   = useState(!!initialTemplateId);
 
     const searchTimeout = useRef(null);
 
@@ -1384,7 +1140,9 @@ function ListTab({ endpoints, trans, companieId }) {
                 </div>
 
                 {/* Status filter */}
-                <StatusFilter selected={statuses} onChange={handleStatusChange} trans={trans} />
+                <MobileFilters count={statuses.length === ALL_STATUSES.length ? 0 : statuses.length} trans={trans}>
+                    <StatusFilter config={STATUS_CONFIG} ids={ALL_STATUSES} selected={statuses} onChange={handleStatusChange} trans={trans} allowEmpty={false} fallback="value" />
+                </MobileFilters>
 
                 {/* Spacer */}
                 <div className="flex-grow-1" />
@@ -1424,14 +1182,117 @@ function ListTab({ endpoints, trans, companieId }) {
                 <KanbanBoard quotes={quotes} trans={trans} />
             )}
 
-            <Pagination meta={meta} onPageChange={setPage} />
+            <Pagination meta={meta} ulClassName="pagination pagination-sm justify-content-end" onPage={setPage} />
 
             <CreateModal
                 show={showModal}
                 onClose={() => setShowModal(false)}
                 endpoints={endpoints}
                 trans={trans}
+                initialTemplateId={initialTemplateId}
             />
+        </div>
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Templates Tab — trames de devis
+// ---------------------------------------------------------------------------
+
+function TemplatesTab({ endpoints, trans }) {
+    const [templates, setTemplates] = useState(null);
+    const [search, setSearch]       = useState('');
+    const [startFrom, setStartFrom] = useState(null);
+
+    const load = useCallback(() => {
+        const params = new URLSearchParams(search ? { search } : {});
+        apiFetch(`${endpoints.templates}?${params}`)
+            .then(data => setTemplates(data.data ?? []))
+            .catch(() => setTemplates([]));
+    }, [search, endpoints.templates]);
+
+    useEffect(() => {
+        const timer = setTimeout(load, 300);
+        return () => clearTimeout(timer);
+    }, [load]);
+
+    const handleDelete = async (template) => {
+        if (!window.confirm(trans.delete_template_confirm)) return;
+        // La route renvoie une redirection (formulaire de la page devis) : seul le statut compte ici.
+        const res = await fetch(template.destroy_url, {
+            method:  'DELETE',
+            headers: { 'X-CSRF-TOKEN': csrfToken(), 'Accept': 'text/html' },
+        });
+        if (res.ok) load();
+    };
+
+    return (
+        <div>
+            <div className="d-flex flex-wrap align-items-center mb-2" style={{ gap: '0.5rem' }}>
+                <div className="input-group input-group-sm flex-shrink-0" style={{ width: 240 }}>
+                    <div className="input-group-prepend">
+                        <span className="input-group-text"><i className="fas fa-search" /></span>
+                    </div>
+                    <input type="text" className="form-control" placeholder={trans.search}
+                        value={search} onChange={e => setSearch(e.target.value)} />
+                </div>
+            </div>
+
+            {templates === null ? (
+                <div className="text-center py-4"><i className="fas fa-spinner fa-spin fa-2x" /></div>
+            ) : templates.length === 0 ? (
+                <div className="callout callout-info mb-0">{trans.no_templates_yet}</div>
+            ) : (
+                <div className="table-responsive">
+                    <table className="table table-hover table-sm mb-0">
+                        <thead className="thead-light">
+                            <tr>
+                                <th>{trans.label}</th>
+                                <th>{trans.code}</th>
+                                <th className="text-right">{trans.lines}</th>
+                                <th>{trans.author}</th>
+                                <th>{trans.updated_at}</th>
+                                <th className="text-right" />
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {templates.map(t => (
+                                <tr key={t.id}>
+                                    <td>
+                                        <a href={t.url}><i className="fas fa-layer-group mr-1 text-info" />{t.label}</a>
+                                        {t.comment && <div className="small text-muted text-truncate" style={{ maxWidth: 420 }}>{t.comment}</div>}
+                                    </td>
+                                    <td className="text-muted small">{t.code}</td>
+                                    <td className="text-right">{t.quote_lines_count}</td>
+                                    <td>{t.author ?? '—'}</td>
+                                    <td>{t.updated_at}</td>
+                                    <td className="text-right text-nowrap">
+                                        <button className="btn btn-xs btn-success mr-1" onClick={() => setStartFrom(t.id)}>
+                                            <i className="fas fa-plus mr-1" />{trans.new_quote}
+                                        </button>
+                                        <a href={t.url} className="btn btn-xs btn-outline-secondary mr-1" title={trans.open_template}>
+                                            <i className="fas fa-pen" />
+                                        </a>
+                                        <button className="btn btn-xs btn-outline-danger" title={trans.delete_template} onClick={() => handleDelete(t)}>
+                                            <i className="fas fa-trash" />
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+
+            {startFrom && (
+                <CreateModal
+                    show
+                    onClose={() => setStartFrom(null)}
+                    endpoints={endpoints}
+                    trans={trans}
+                    initialTemplateId={startFrom}
+                />
+            )}
         </div>
     );
 }
@@ -1440,8 +1301,21 @@ function ListTab({ endpoints, trans, companieId }) {
 // Root Component
 // ---------------------------------------------------------------------------
 
+function readUrlParam(name) {
+    try { return new URLSearchParams(window.location.search).get(name); } catch { return null; }
+}
+
 export default function QuotesIndex({ kpi, chartData, topCustomers, quotesByUser, endpoints, trans, companieId = null }) {
-    const [activeTab, setActiveTab] = useState(companieId ? 'list' : 'dashboard');
+    // ?tab=templates|list ouvre directement l'onglet, ?template=ID pré-remplit « Nouveau devis ».
+    const canTemplates = !companieId && !!endpoints.templates;
+    const initialTemplateId = canTemplates ? readUrlParam('template') : null;
+    const [activeTab, setActiveTab] = useState(() => {
+        const tab = readUrlParam('tab');
+        if (initialTemplateId) return 'list';
+        if (tab === 'templates' && canTemplates) return 'templates';
+        if (tab === 'list') return 'list';
+        return companieId ? 'list' : 'dashboard';
+    });
 
     return (
         <div className="card card-outline card-teal">
@@ -1465,6 +1339,17 @@ export default function QuotesIndex({ kpi, chartData, topCustomers, quotesByUser
                             {trans.quotes_list}
                         </a>
                     </li>
+                    {canTemplates && (
+                        <li className="nav-item">
+                            <a
+                                className={`nav-link ${activeTab === 'templates' ? 'active' : ''}`}
+                                href="#"
+                                onClick={e => { e.preventDefault(); setActiveTab('templates'); }}
+                            >
+                                <i className="fas fa-layer-group mr-1" />{trans.quote_templates}
+                            </a>
+                        </li>
+                    )}
                 </ul>
             </div>
             <div className="card-body p-3">
@@ -1478,7 +1363,10 @@ export default function QuotesIndex({ kpi, chartData, topCustomers, quotesByUser
                     />
                 )}
                 {activeTab === 'list' && (
-                    <ListTab endpoints={endpoints} trans={trans} companieId={companieId} />
+                    <ListTab endpoints={endpoints} trans={trans} companieId={companieId} initialTemplateId={initialTemplateId} />
+                )}
+                {activeTab === 'templates' && (
+                    <TemplatesTab endpoints={endpoints} trans={trans} />
                 )}
             </div>
         </div>

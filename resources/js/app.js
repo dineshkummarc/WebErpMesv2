@@ -85,26 +85,6 @@ async function mountNestingPage() {
     createRoot(element).render(React.createElement(NestingPage));
 }
 
-async function mountPunchDesigner() {
-    const element = document.getElementById('punch-designer-app');
-    if (!element) return;
-
-    const { default: PunchDesigner } = await import('./components/PunchDesigner.jsx');
-    createRoot(element).render(React.createElement(PunchDesigner, {
-        brand: element.dataset.brand,
-        libraryUrl: element.dataset.libraryUrl,
-        catalogUrl: element.dataset.catalogUrl,
-    }));
-}
-
-async function mountToolCatalog() {
-    const element = document.getElementById('tool-catalog-app');
-    if (!element) return;
-
-    const { default: ToolCatalog } = await import('./components/ToolCatalog.jsx');
-    createRoot(element).render(React.createElement(ToolCatalog, { libraryUrl: element.dataset.libraryUrl }));
-}
-
 async function mountToolConfigurator() {
     const element = document.getElementById('tool-configurator-app');
     if (!element) return;
@@ -1363,8 +1343,6 @@ mountDocumentTable();
 mountCompaniesIndex();
 mountWhiteboard();
 mountNestingPage();
-mountPunchDesigner();
-mountToolCatalog();
 mountToolConfigurator();
 mountReorderPage();
 mountQuotesIndex();
@@ -1598,6 +1576,40 @@ async function mountOpportunityVisit() {
     createRoot(el).render(React.createElement(OpportunityVisitApp, props));
 }
 
+async function mountAffairSummary() {
+    const els = document.querySelectorAll('[data-react="affair-summary"]');
+    if (!els.length) return;
+    const { default: AffairSummary } = await import('./components/affairs/AffairSummary.jsx');
+    els.forEach(el => {
+        const parse = (k) => { try { return JSON.parse(el.dataset[k] ?? 'null'); } catch { return null; } };
+        createRoot(el).render(
+            React.createElement(AffairSummary, {
+                endpoints: parse('endpoints') ?? {},
+                trans:     parse('trans')     ?? {},
+                locale:    el.dataset.locale   || 'fr',
+                currency:  el.dataset.currency || 'EUR',
+            })
+        );
+    });
+}
+
+async function mountAffairTimeline() {
+    const els = document.querySelectorAll('[data-react="affair-timeline"]');
+    if (!els.length) return;
+    const { default: AffairTimeline } = await import('./components/affairs/AffairTimeline.jsx');
+    els.forEach(el => {
+        const parse = (k) => { try { return JSON.parse(el.dataset[k] ?? 'null'); } catch { return null; } };
+        createRoot(el).render(
+            React.createElement(AffairTimeline, {
+                endpoint: el.dataset.endpoint ?? '',
+                trans:    parse('trans')     ?? {},
+                locale:   el.dataset.locale   || 'fr',
+                currency: el.dataset.currency || 'EUR',
+            })
+        );
+    });
+}
+
 async function mountArrowSteps() {
     const els = document.querySelectorAll('[data-react="arrow-steps"]');
     if (!els.length) return;
@@ -1719,6 +1731,8 @@ mountTaskLines();
 mountLogsViewer();
 mountFileManagers();
 mountOpportunityVisit();
+mountAffairSummary();
+mountAffairTimeline();
 mountArrowSteps();
 mountStockCurrentApp();
 mountChatLive();

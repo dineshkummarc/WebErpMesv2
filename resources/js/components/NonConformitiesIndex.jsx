@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { DataTable, Pagination, StatusBadge, StatusFilter, MobileFilters } from './table';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -10,6 +11,9 @@ const STATUS_CONFIG = {
     3: { badge: 'badge-success', label: 'solved' },
     4: { badge: 'badge-danger',  label: 'canceled' },
 };
+
+const LS_COL_ORDER   = 'non_conformities_table_col_order';
+const LS_HIDDEN_COLS = 'non_conformities_table_hidden_cols';
 
 const TYPE_CONFIG = {
     1: { badge: 'badge-warning', label: 'internal' },
@@ -41,11 +45,6 @@ function Avatar({ name }) {
             {initials(name)}
         </span>
     );
-}
-
-function StatusBadge({ statu, trans }) {
-    const cfg = STATUS_CONFIG[statu] ?? { badge: 'badge-secondary', label: String(statu) };
-    return <span className={`badge ${cfg.badge}`}>{trans[cfg.label] ?? cfg.label}</span>;
 }
 
 function TypeBadge({ type, trans }) {
@@ -507,29 +506,6 @@ function CreateForm({ trans, users, services, companies, failures, causes, corre
     );
 }
 
-// ---------------------------------------------------------------------------
-// StatusFilter
-// ---------------------------------------------------------------------------
-
-function StatusFilter({ active, onToggle, trans }) {
-    return (
-        <div className="d-flex flex-wrap" style={{ gap: '0.25rem' }}>
-            {Object.entries(STATUS_CONFIG).map(([id, cfg]) => {
-                const sid = Number(id);
-                const isActive = active.includes(sid);
-                return (
-                    <button key={sid} type="button"
-                        className={`btn btn-sm ${isActive ? cfg.badge.replace('badge-', 'btn-') : 'btn-outline-secondary'}`}
-                        onClick={() => onToggle(sid)}
-                    >
-                        {trans[cfg.label] ?? cfg.label}
-                    </button>
-                );
-            })}
-        </div>
-    );
-}
-
 function TypeFilter({ active, onToggle, trans }) {
     return (
         <div className="d-flex flex-wrap" style={{ gap: '0.25rem' }}>
@@ -550,34 +526,45 @@ function TypeFilter({ active, onToggle, trans }) {
 }
 
 // ---------------------------------------------------------------------------
-// Pagination
-// ---------------------------------------------------------------------------
-
-function Pagination({ meta, onPage }) {
-    if (!meta || meta.last_page <= 1) return null;
-    const pages = Array.from({ length: meta.last_page }, (_, i) => i + 1);
-    return (
-        <nav className="mt-2">
-            <ul className="pagination pagination-sm m-0 flex-wrap">
-                <li className={`page-item ${meta.current_page === 1 ? 'disabled' : ''}`}>
-                    <button className="page-link" onClick={() => onPage(meta.current_page - 1)}>&laquo;</button>
-                </li>
-                {pages.map(p => (
-                    <li key={p} className={`page-item ${p === meta.current_page ? 'active' : ''}`}>
-                        <button className="page-link" onClick={() => onPage(p)}>{p}</button>
-                    </li>
-                ))}
-                <li className={`page-item ${meta.current_page === meta.last_page ? 'disabled' : ''}`}>
-                    <button className="page-link" onClick={() => onPage(meta.current_page + 1)}>&raquo;</button>
-                </li>
-            </ul>
-        </nav>
-    );
-}
-
-// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Table — colonnes déclarées, rendu par le DataTable partagé
+// ---------------------------------------------------------------------------
+
+const linkOrNa = (url, label, className) => (url
+    ? <a href={url} className={`btn btn-xs ${className}`}>{label}</a>
+    : <span className="text-muted">N/A</span>);
+
+function ncColumns(trans, endpoints) {
+    const t = k => trans[k] ?? k;
+    return [
+        { key: 'code',       label: t('external_id'),    sortable: true,
+          render: nc => <code>{nc.code}</code>, filter: 'text', mobile: 'title', mobileRender: nc => nc.code },
+        { key: 'label',      label: t('label'),          sortable: true,
+          filter: 'text', mobile: 'subtitle' },
+        { key: 'user',       label: t('user'),
+          render: nc => <Avatar name={nc.user_name} />, filterValue: nc => nc.user_name, filter: 'text' },
+        { key: 'type',       label: t('type'),           sortable: true,
+          render: nc => <TypeBadge type={nc.type} trans={trans} />, mobile: 'badge', mobileOrder: 2000 },
+        { key: 'statu',      label: t('status'),         sortable: true,
+          render: nc => <StatusBadge statu={nc.statu} config={STATUS_CONFIG} trans={trans} />, mobile: 'badge' },
+        { key: 'company',    label: t('company'),
+          render: nc => linkOrNa(nc.companie_id && `${endpoints.companieBase}/${nc.companie_id}`, nc.companie_label, 'btn-outline-secondary'),
+          filterValue: nc => nc.companie_label, filter: 'text', mobile: 'subtitle', mobileOrder: 1, mobileRender: nc => nc.companie_label },
+        { key: 'order',      label: t('order'),
+          render: nc => linkOrNa(nc.order_id && `${endpoints.orderBase}/${nc.order_id}`, nc.order_code, 'btn-outline-dark'),
+          filterValue: nc => nc.order_code, filter: 'text' },
+        { key: 'task',       label: t('task'),
+          render: nc => linkOrNa(nc.task_id && `${endpoints.taskBase}/${nc.task_id}`, t('view'), 'btn-success') },
+        { key: 'delivery',   label: t('delivery_notes'),
+          render: nc => linkOrNa(nc.deliverys_id && `${endpoints.deliveryBase}/${nc.deliverys_id}`, nc.delivery_code, 'btn-primary'),
+          filterValue: nc => nc.delivery_code, filter: 'text' },
+        { key: 'created_at', label: t('created_at'),     sortable: true,
+          render: nc => <small>{nc.created_pretty}</small>, filter: 'date', mobile: 'subtitle', mobileRender: nc => nc.created_pretty },
+    ];
+}
 
 export default function NonConformitiesIndex({
     endpoints, users, services, companies, failures, causes, corrections, nextCode, trans,
@@ -625,11 +612,6 @@ export default function NonConformitiesIndex({
         setPage(1);
     }
 
-    function SortIcon({ field }) {
-        if (field !== sortField) return <i className="fas fa-sort text-muted ml-1" />;
-        return <i className={`fas fa-sort-${sortAsc ? 'up' : 'down'} ml-1`} />;
-    }
-
     function handleSaved(updated) {
         setItems(prev => prev.map(nc => nc.id === updated.id ? updated : nc));
         setEditNc(null);
@@ -660,81 +642,61 @@ export default function NonConformitiesIndex({
                                 </div>
                             )}
                         </div>
-                        <StatusFilter active={statuses} onToggle={sid => { setStatuses(p => p.includes(sid) ? p.filter(s => s !== sid) : [...p, sid]); setPage(1); }} trans={trans} />
-                        <TypeFilter   active={types}    onToggle={tid => { setTypes(p => p.includes(tid) ? p.filter(t => t !== tid) : [...p, tid]); setPage(1); }} trans={trans} />
+                        <MobileFilters count={statuses.length + types.length} trans={trans}>
+                            <StatusFilter config={STATUS_CONFIG} selected={statuses} onToggle={sid => { setStatuses(p => p.includes(sid) ? p.filter(s => s !== sid) : [...p, sid]); setPage(1); }} trans={trans} buttonType="button" />
+                            <TypeFilter   active={types}    onToggle={tid => { setTypes(p => p.includes(tid) ? p.filter(t => t !== tid) : [...p, tid]); setPage(1); }} trans={trans} />
+                        </MobileFilters>
                         <div className="flex-grow-1" />
                         {loading && <i className="fas fa-spinner fa-spin text-muted" />}
                         {meta && <small className="text-muted">{meta.total} {t('results')}</small>}
                     </div>
 
                     {/* Table */}
-                    <div className="table-responsive">
-                        <table className="table table-sm table-striped table-hover">
-                            <thead>
-                                <tr>
-                                    <th style={{ cursor: 'pointer' }} onClick={() => handleSort('code')}>{t('external_id')}<SortIcon field="code" /></th>
-                                    <th style={{ cursor: 'pointer' }} onClick={() => handleSort('label')}>{t('label')}<SortIcon field="label" /></th>
-                                    <th>{t('user')}</th>
-                                    <th style={{ cursor: 'pointer' }} onClick={() => handleSort('type')}>{t('type')}<SortIcon field="type" /></th>
-                                    <th style={{ cursor: 'pointer' }} onClick={() => handleSort('statu')}>{t('status')}<SortIcon field="statu" /></th>
-                                    <th>{t('company')}</th>
-                                    <th>{t('order')}</th>
-                                    <th>{t('task')}</th>
-                                    <th>{t('delivery_notes')}</th>
-                                    <th style={{ cursor: 'pointer' }} onClick={() => handleSort('created_at')}>{t('created_at')}<SortIcon field="created_at" /></th>
-                                    <th>{t('actions')}</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {items.length === 0 && !loading && (
-                                    <tr><td colSpan="11" className="text-center text-muted py-3">{t('no_data')}</td></tr>
-                                )}
-                                {items.map(nc => (
-                                    <tr key={nc.id}>
-                                        <td><code>{nc.code}</code></td>
-                                        <td>{nc.label}</td>
-                                        <td><Avatar name={nc.user_name} /></td>
-                                        <td><TypeBadge type={nc.type} trans={trans} /></td>
-                                        <td><StatusBadge statu={nc.statu} trans={trans} /></td>
-                                        <td>
-                                            {nc.companie_id
-                                                ? <a href={`${endpoints.companieBase}/${nc.companie_id}`} className="btn btn-xs btn-outline-secondary">{nc.companie_label}</a>
-                                                : <span className="text-muted">N/A</span>}
-                                        </td>
-                                        <td>
-                                            {nc.order_id
-                                                ? <a href={`${endpoints.orderBase}/${nc.order_id}`} className="btn btn-xs btn-outline-dark">{nc.order_code}</a>
-                                                : <span className="text-muted">N/A</span>}
-                                        </td>
-                                        <td>
-                                            {nc.task_id
-                                                ? <a href={`${endpoints.taskBase}/${nc.task_id}`} className="btn btn-xs btn-success">{t('view')}</a>
-                                                : <span className="text-muted">N/A</span>}
-                                        </td>
-                                        <td>
-                                            {nc.deliverys_id
-                                                ? <a href={`${endpoints.deliveryBase}/${nc.deliverys_id}`} className="btn btn-xs btn-primary">{nc.delivery_code}</a>
-                                                : <span className="text-muted">N/A</span>}
-                                        </td>
-                                        <td><small>{nc.created_pretty}</small></td>
-                                        <td style={{ whiteSpace: 'nowrap' }}>
-                                            <button className="btn btn-xs btn-info mr-1" onClick={() => setViewNc(nc)} title={t('view')}>
-                                                <i className="fas fa-eye" />
-                                            </button>
-                                            <button className="btn btn-xs btn-teal mr-1" onClick={() => setEditNc(nc)} title={t('edit')}>
-                                                <i className="fas fa-edit" />
-                                            </button>
-                                            <a href={`${endpoints.pdfBase}/${nc.id}`} className="btn btn-xs btn-danger" title="PDF" target="_blank" rel="noopener noreferrer">
-                                                <i className="fas fa-file-pdf" />
-                                            </a>
-                                        </td>
-                                    </tr>
+                    <DataTable
+                        rows={items}
+                        columns={ncColumns(trans, endpoints)}
+                        trans={trans}
+                        sortField={sortField}
+                        sortAsc={sortAsc}
+                        onSort={handleSort}
+                        storage={{ order: LS_COL_ORDER, hidden: LS_HIDDEN_COLS }}
+                        unsortableIcon={false}
+                        tableClassName="table table-sm table-striped table-hover"
+                        emptyText={t('no_data')}
+                        actionsHeader={t('actions')}
+                        actionsWidth={110}
+                        actionsCellStyle={{ whiteSpace: 'nowrap' }}
+                        rowActions={nc => (
+                            <>
+                                <button className="btn btn-xs btn-info mr-1" onClick={() => setViewNc(nc)} title={t('view')}>
+                                    <i className="fas fa-eye" />
+                                </button>
+                                <button className="btn btn-xs btn-teal mr-1" onClick={() => setEditNc(nc)} title={t('edit')}>
+                                    <i className="fas fa-edit" />
+                                </button>
+                                <a href={`${endpoints.pdfBase}/${nc.id}`} className="btn btn-xs btn-danger" title="PDF" target="_blank" rel="noopener noreferrer">
+                                    <i className="fas fa-file-pdf" />
+                                </a>
+                            </>
+                        )}
+                        mobileActions={nc => (
+                            <div className="d-flex" style={{ gap: '0.5rem' }}>
+                                {[
+                                    ['fa-eye', t('view'), () => setViewNc(nc)],
+                                    ['fa-edit', t('edit'), () => setEditNc(nc)],
+                                ].map(([icon, label, onClick]) => (
+                                    <button key={icon} type="button" className="btn btn-outline-secondary" style={{ minHeight: 44 }} onClick={onClick}>
+                                        <i className={`fas ${icon} mr-1`} />{label}
+                                    </button>
                                 ))}
-                            </tbody>
-                        </table>
-                    </div>
+                                <a href={`${endpoints.pdfBase}/${nc.id}`} className="btn btn-outline-secondary" style={{ minHeight: 44, lineHeight: '30px' }} target="_blank" rel="noopener noreferrer">
+                                    <i className="fas fa-file-pdf text-danger mr-1" />PDF
+                                </a>
+                            </div>
+                        )}
+                    />
 
-                    <Pagination meta={meta} onPage={setPage} />
+                    <Pagination meta={meta} navClassName="mt-2" ulClassName="pagination pagination-sm m-0 flex-wrap" onPage={setPage} />
                 </div>
             </div>
 
