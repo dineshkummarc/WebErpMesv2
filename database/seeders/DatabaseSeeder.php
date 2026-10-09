@@ -59,6 +59,7 @@ class DatabaseSeeder extends Seeder
             AssetRolePermissionSeeder::class,
             CreateAdminUserSeeder::class,
             AllocationSeeder::class,
+            VatMatrixSeeder::class,
             LeaveTypeSeeder::class,
         ]);
 

@@ -58,6 +58,29 @@
                                   <option value="1" @if($VAT->default == 1) selected @endif>{{ __('general_content.yes_trans_key') }}</option>
                               </select>
                             </div>
+                            <hr>
+                            <p class="text-muted mb-2"><small>{{ __('vat.en16931_help') }}</small></p>
+                            <div class="form-group">
+                              <label>{{ __('vat.en16931_category') }}</label>
+                              <select class="form-control" name="en16931_category">
+                                <option value="" @if(!$VAT->en16931_category) selected @endif>{{ __('vat.category_fallback') }}</option>
+                                @foreach (__('vat.categories') as $code => $lib)
+                                  <option value="{{ $code }}" @if($VAT->en16931_category === $code) selected @endif>{{ $lib }}</option>
+                                @endforeach
+                              </select>
+                            </div>
+                            <div class="form-group">
+                              <label>{{ __('vat.exemption_reason_code') }}</label>
+                              <input type="text" class="form-control" name="exemption_reason_code" value="{{ $VAT->exemption_reason_code }}" placeholder="VATEX-EU-IC">
+                            </div>
+                            <div class="form-group">
+                              <label>{{ __('vat.exemption_reason_text') }}</label>
+                              <input type="text" class="form-control" name="exemption_reason_text" value="{{ $VAT->exemption_reason_text }}" placeholder="{{ __('vat.exemption_text_example') }}">
+                            </div>
+                            <div class="form-group">
+                              <label>{{ __('vat.legal_mention') }}</label>
+                              <textarea class="form-control" name="legal_mention" rows="2" placeholder="{{ __('vat.legal_mention_hint') }}">{{ $VAT->legal_mention }}</textarea>
+                            </div>
                           </div>
                           <div class="card-footer">
                             <x-adminlte-button class="btn-flat" type="submit" label="{{ __('general_content.update_trans_key') }}" theme="info" icon="fas fa-lg fa-save"/>
@@ -115,6 +138,27 @@
                   </div>
                   <input type="number" class="form-control" name="rate"  id="rate" placeholder="10 %" step=".01">
                 </div>
+              </div>
+              <div class="form-group">
+                <label>{{ __('vat.en16931_category') }}</label>
+                <select class="form-control" name="en16931_category">
+                  <option value="">{{ __('vat.category_fallback') }}</option>
+                  @foreach (__('vat.categories') as $code => $lib)
+                    <option value="{{ $code }}">{{ $lib }}</option>
+                  @endforeach
+                </select>
+              </div>
+              <div class="form-group">
+                <label>{{ __('vat.exemption_reason_code') }}</label>
+                <input type="text" class="form-control" name="exemption_reason_code" placeholder="VATEX-EU-IC">
+              </div>
+              <div class="form-group">
+                <label>{{ __('vat.exemption_reason_text') }}</label>
+                <input type="text" class="form-control" name="exemption_reason_text" placeholder="{{ __('vat.exemption_text_example') }}">
+              </div>
+              <div class="form-group">
+                <label>{{ __('vat.legal_mention') }}</label>
+                <textarea class="form-control" name="legal_mention" rows="2"></textarea>
               </div>
               <x-slot name="footerSlot">
                 <x-adminlte-button class="btn-flat" type="submit" label="{{ __('general_content.submit_trans_key') }}" theme="danger" icon="fas fa-lg fa-save"/>

@@ -37,6 +37,9 @@ Route::group(['prefix' => LaravelLocalization::setLocale(),
         // Chat pour page guest (sans auth, sécurisé via UUID du devis)
         Route::get('/guest/quote/{uuid}/chats', [\App\Http\Controllers\GuestChatController::class, 'index'])->name('guest.chats.index');
         Route::post('/guest/quote/{uuid}/chats', [\App\Http\Controllers\GuestChatController::class, 'store'])->name('guest.chats.store');
+        // Signature électronique (DocuSign) depuis le lien public du devis
+        Route::post('/guest/quote/{uuid}/signature', [\App\Http\Controllers\GuestQuoteSignatureController::class, 'start'])->middleware('throttle:10,1')->name('guest.quote.signature.start');
+        Route::get('/guest/quote/{uuid}/signature/return', [\App\Http\Controllers\GuestQuoteSignatureController::class, 'return'])->name('guest.quote.signature.return');
     });
     Route::get('/integrations/qonto/callback', [\App\Http\Controllers\Integrations\QontoSettingsController::class, 'callback'])->name('admin.integrations.qonto.callback');
 
@@ -677,6 +680,34 @@ Route::group(['prefix' => LaravelLocalization::setLocale(),
             Route::post('/lock', [\App\Http\Controllers\Accounting\AccountingPeriodController::class, 'lock'])->name('accounting.periods.lock');
             Route::delete('/{year}/{month}', [\App\Http\Controllers\Accounting\AccountingPeriodController::class, 'unlock'])->name('accounting.periods.unlock');
         });
+
+        // Matrice de TVA (régime × nature) — paramétrage réservé à l'administration comptable
+        Route::middleware(['permission:accounting-manage'])->group(function () {
+            Route::get('/vat-references', 'App\Http\Controllers\Accounting\AccountingController@vatReferences')->name('accounting.vatReferences');
+            Route::get('/vat-matrix-sales', 'App\Http\Controllers\Accounting\AccountingController@vatMatrixSales')->name('accounting.vatMatrixSales');
+            Route::get('/vat-matrix-purchase', 'App\Http\Controllers\Accounting\AccountingController@vatMatrixPurchase')->name('accounting.vatMatrixPurchase');
+
+            Route::prefix('vat-regime')->group(function () {
+                Route::post('/create', 'App\Http\Controllers\Accounting\VatReferenceController@regimeStore')->name('accounting.vatRegime.create');
+                Route::post('/edit/{id}', 'App\Http\Controllers\Accounting\VatReferenceController@regimeUpdate')->name('accounting.vatRegime.update');
+                Route::delete('/{id}', 'App\Http\Controllers\Accounting\VatReferenceController@regimeDestroy')->name('accounting.vatRegime.destroy');
+            });
+            Route::prefix('vat-nature')->group(function () {
+                Route::post('/create', 'App\Http\Controllers\Accounting\VatReferenceController@natureStore')->name('accounting.vatNature.create');
+                Route::post('/edit/{id}', 'App\Http\Controllers\Accounting\VatReferenceController@natureUpdate')->name('accounting.vatNature.update');
+                Route::delete('/{id}', 'App\Http\Controllers\Accounting\VatReferenceController@natureDestroy')->name('accounting.vatNature.destroy');
+            });
+            Route::prefix('vat-matrix/sales')->group(function () {
+                Route::post('/create', 'App\Http\Controllers\Accounting\VatMatrixController@salesStore')->name('accounting.vatMatrixSales.create');
+                Route::post('/edit/{id}', 'App\Http\Controllers\Accounting\VatMatrixController@salesUpdate')->name('accounting.vatMatrixSales.update');
+                Route::delete('/{id}', 'App\Http\Controllers\Accounting\VatMatrixController@salesDestroy')->name('accounting.vatMatrixSales.destroy');
+            });
+            Route::prefix('vat-matrix/purchase')->group(function () {
+                Route::post('/create', 'App\Http\Controllers\Accounting\VatMatrixController@purchaseStore')->name('accounting.vatMatrixPurchase.create');
+                Route::post('/edit/{id}', 'App\Http\Controllers\Accounting\VatMatrixController@purchaseUpdate')->name('accounting.vatMatrixPurchase.update');
+                Route::delete('/{id}', 'App\Http\Controllers\Accounting\VatMatrixController@purchaseDestroy')->name('accounting.vatMatrixPurchase.destroy');
+            });
+        });
     });
 
     Route::group(['prefix' => 'assets', 'middleware' => ['auth', 'verified', 'has.role', 'check.factory']], function () {
@@ -983,6 +1014,12 @@ Route::group(['prefix' => LaravelLocalization::setLocale(),
             Route::get('/',    [\App\Http\Controllers\Admin\MailSettingsController::class, 'index'])->name('index');
             Route::put('/',    [\App\Http\Controllers\Admin\MailSettingsController::class, 'update'])->name('update');
             Route::post('/test', [\App\Http\Controllers\Admin\MailSettingsController::class, 'test'])->name('test');
+        });
+
+        Route::middleware(['auth', 'verified', 'has.role'])->prefix('integrations/esignature')->name('admin.integrations.esignature.')->group(function () {
+            Route::get('/',      [\App\Http\Controllers\Admin\ESignatureSettingsController::class, 'index'])->name('index');
+            Route::put('/',      [\App\Http\Controllers\Admin\ESignatureSettingsController::class, 'update'])->name('update');
+            Route::post('/test', [\App\Http\Controllers\Admin\ESignatureSettingsController::class, 'test'])->name('test');
         });
 
         Route::middleware(['auth', 'verified', 'has.role'])->prefix('email-logs')->name('admin.email-logs.')->group(function () {

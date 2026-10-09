@@ -57,6 +57,9 @@ class Companies extends Model
                             'siren', 
                             'naf_code', 
                             'intra_community_vat',
+                            'vat_regime_id',
+                            'vat_attestation_ref',
+                            'vat_attestation_valid_until',
                             'electronic_address',
                             'electronic_address_scheme',
                             'statu_customer',
@@ -80,6 +83,11 @@ class Companies extends Model
                             'csv_file_name',
                         ];
 
+    // La fiche lit cette date via ->format() : sans cast, une chaîne → erreur 500.
+    protected $casts = [
+        'vat_attestation_valid_until' => 'date',
+    ];
+
     public function getActivitylogOptions(): LogOptions
     {
         return LogOptions::defaults()
@@ -87,6 +95,14 @@ class Companies extends Model
             ->logOnlyDirty()
             ->dontSubmitEmptyLogs()
             ->setDescriptionForEvent(fn (string $event) => "Entreprise {$event}");
+    }
+
+    /**
+     * Régime de TVA du tiers (axe de la matrice de TVA).
+     */
+    public function vatRegime()
+    {
+        return $this->belongsTo(\App\Models\Accounting\VatRegime::class, 'vat_regime_id');
     }
 
     /**

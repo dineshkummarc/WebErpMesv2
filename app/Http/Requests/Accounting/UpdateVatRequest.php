@@ -26,8 +26,12 @@ class UpdateVatRequest extends FormRequest
         return [
             //
             'label'=>'required',
-            'rate'=>'required|unique:accounting_vats,rate,'. $this->id,
+            'rate'=>['required', StoreVatRequest::uniqueRateInCategory($this->input('en16931_category'))->ignore($this->id)],
             'default'=>'integer',
+            'en16931_category'=>'nullable|string|max:4',
+            'exemption_reason_code'=>'nullable|string|max:255',
+            'exemption_reason_text'=>'nullable|string',
+            'legal_mention'=>'nullable|string',
         ];
     }
 }
