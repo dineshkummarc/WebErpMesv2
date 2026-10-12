@@ -1,0 +1,295 @@
+<?php
+
+namespace LdapRecord\Models\Attributes;
+
+use InvalidArgumentException;
+use LdapRecord\LdapRecordException;
+use ReflectionMethod;
+use SensitiveParameter;
+
+class Password
+{
+    public const CRYPT_SALT_TYPE_MD5 = 1;
+
+    public const CRYPT_SALT_TYPE_SHA256 = 5;
+
+    public const CRYPT_SALT_TYPE_SHA512 = 6;
+
+    /**
+     * Make an encoded password for transmission over LDAP.
+     */
+    public static function encode(#[SensitiveParameter] string $password): string
+    {
+        return iconv('UTF-8', 'UTF-16LE', '"'.$password.'"');
+    }
+
+    /**
+     * Make a salted md5 password.
+     */
+    public static function smd5(#[SensitiveParameter] string $password, ?string $salt = null): string
+    {
+        return '{SMD5}'.static::makeHash($password, 'md5', null, $salt ?? random_bytes(4));
+    }
+
+    /**
+     * Make a salted SHA password.
+     */
+    public static function ssha(#[SensitiveParameter] string $password, ?string $salt = null): string
+    {
+        return '{SSHA}'.static::makeHash($password, 'sha1', null, $salt ?? random_bytes(4));
+    }
+
+    /**
+     * Make a salted SSHA256 password.
+     */
+    public static function ssha256(#[SensitiveParameter] string $password, ?string $salt = null): string
+    {
+        return '{SSHA256}'.static::makeHash($password, 'hash', 'sha256', $salt ?? random_bytes(4));
+    }
+
+    /**
+     * Make a salted SSHA384 password.
+     */
+    public static function ssha384(#[SensitiveParameter] string $password, ?string $salt = null): string
+    {
+        return '{SSHA384}'.static::makeHash($password, 'hash', 'sha384', $salt ?? random_bytes(4));
+    }
+
+    /**
+     * Make a salted SSHA512 password.
+     */
+    public static function ssha512(#[SensitiveParameter] string $password, ?string $salt = null): string
+    {
+        return '{SSHA512}'.static::makeHash($password, 'hash', 'sha512', $salt ?? random_bytes(4));
+    }
+
+    /**
+     * Make a non-salted SHA password.
+     */
+    public static function sha(#[SensitiveParameter] string $password): string
+    {
+        return '{SHA}'.static::makeHash($password, 'sha1');
+    }
+
+    /**
+     * Make a non-salted SHA256 password.
+     */
+    public static function sha256(#[SensitiveParameter] string $password): string
+    {
+        return '{SHA256}'.static::makeHash($password, 'hash', 'sha256');
+    }
+
+    /**
+     * Make a non-salted SHA384 password.
+     */
+    public static function sha384(#[SensitiveParameter] string $password): string
+    {
+        return '{SHA384}'.static::makeHash($password, 'hash', 'sha384');
+    }
+
+    /**
+     * Make a non-salted SHA512 password.
+     */
+    public static function sha512(#[SensitiveParameter] string $password): string
+    {
+        return '{SHA512}'.static::makeHash($password, 'hash', 'sha512');
+    }
+
+    /**
+     * Make a non-salted md5 password.
+     */
+    public static function md5(#[SensitiveParameter] string $password): string
+    {
+        return '{MD5}'.static::makeHash($password, 'md5');
+    }
+
+    /**
+     * Make an argon2i password.
+     *
+     * OpenLDAP's argon2 module registers the single scheme {ARGON2} —
+     * the variant is carried by the PHC string that follows it.
+     *
+     * @throws LdapRecordException
+     */
+    public static function argon2i(#[SensitiveParameter] string $password): string
+    {
+        if (! defined('PASSWORD_ARGON2I')) {
+            throw new LdapRecordException('Argon2i hashing is not supported by this PHP build.');
+        }
+
+        return '{ARGON2}'.password_hash($password, PASSWORD_ARGON2I);
+    }
+
+    /**
+     * Make an argon2id password.
+     *
+     * OpenLDAP's argon2 module registers the single scheme {ARGON2} —
+     * the variant is carried by the PHC string that follows it.
+     *
+     * @throws LdapRecordException
+     */
+    public static function argon2id(#[SensitiveParameter] string $password): string
+    {
+        if (! defined('PASSWORD_ARGON2ID')) {
+            throw new LdapRecordException('Argon2id hashing is not supported by this PHP build.');
+        }
+
+        return '{ARGON2}'.password_hash($password, PASSWORD_ARGON2ID);
+    }
+
+    /**
+     * Make a non-salted NThash password.
+     */
+    public static function nthash(#[SensitiveParameter] string $password): string
+    {
+        return '{NTHASH}'.strtoupper(hash('md4', iconv('UTF-8', 'UTF-16LE', $password)));
+    }
+
+    /**
+     * Crypt password with an MD5 salt.
+     */
+    public static function md5Crypt(#[SensitiveParameter] string $password, ?string $salt = null): string
+    {
+        return '{CRYPT}'.static::makeCrypt($password, static::CRYPT_SALT_TYPE_MD5, $salt);
+    }
+
+    /**
+     * Crypt password with a SHA256 salt.
+     */
+    public static function sha256Crypt(#[SensitiveParameter] string $password, ?string $salt = null): string
+    {
+        return '{CRYPT}'.static::makeCrypt($password, static::CRYPT_SALT_TYPE_SHA256, $salt);
+    }
+
+    /**
+     * Crypt a password with a SHA512 salt.
+     */
+    public static function sha512Crypt(#[SensitiveParameter] string $password, ?string $salt = null): string
+    {
+        return '{CRYPT}'.static::makeCrypt($password, static::CRYPT_SALT_TYPE_SHA512, $salt);
+    }
+
+    /**
+     * Make a new password hash.
+     */
+    protected static function makeHash(#[SensitiveParameter] string $password, string $method, ?string $algo = null, ?string $salt = null): string
+    {
+        $params = $algo ? [$algo, $password.$salt] : [$password.$salt];
+
+        return base64_encode(pack('H*', call_user_func($method, ...$params)).$salt);
+    }
+
+    /**
+     * Make a hashed password.
+     */
+    protected static function makeCrypt(#[SensitiveParameter] string $password, int $type, ?string $salt = null): string
+    {
+        return crypt($password, $salt ?? static::makeCryptSalt($type));
+    }
+
+    /**
+     * Make a salt for the crypt() method using the given type.
+     */
+    protected static function makeCryptSalt(int $type): string
+    {
+        [$prefix, $length] = static::makeCryptPrefixAndLength($type);
+
+        $chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+        while (strlen($prefix) < $length) {
+            $prefix .= substr($chars, random_int(0, strlen($chars) - 1), 1);
+        }
+
+        return $prefix;
+    }
+
+    /**
+     * Determine the crypt prefix and length.
+     *
+     *
+     * @throws InvalidArgumentException
+     */
+    protected static function makeCryptPrefixAndLength(int $type): array
+    {
+        return match ((int) $type) {
+            static::CRYPT_SALT_TYPE_MD5 => ['$1$', 12],
+            static::CRYPT_SALT_TYPE_SHA256 => ['$5$', 16],
+            static::CRYPT_SALT_TYPE_SHA512 => ['$6$', 16],
+            default => throw new InvalidArgumentException("Invalid crypt type [$type]."),
+        };
+    }
+
+    /**
+     * Attempt to retrieve the hash method used for the password.
+     */
+    public static function getHashMethod(#[SensitiveParameter] string $password): ?string
+    {
+        if (! preg_match('/^\{(\w+)\}/', $password, $matches)) {
+            return null;
+        }
+
+        return $matches[1];
+    }
+
+    /**
+     * Attempt to retrieve the hash method and algorithm used for the password.
+     */
+    public static function getHashMethodAndAlgo(#[SensitiveParameter] string $password): ?array
+    {
+        if (! preg_match('/^\{(\w+)\}\$([0-9a-z]{1})\$/', $password, $matches)) {
+            return null;
+        }
+
+        return [$matches[1], $matches[2]];
+    }
+
+    /**
+     * Attempt to retrieve a salt from the encrypted password.
+     *
+     * @throws LdapRecordException
+     */
+    public static function getSalt(#[SensitiveParameter] string $encryptedPassword): string
+    {
+        // crypt() methods.
+        if (preg_match('/^\{(\w+)\}(\$.*\$).*$/', $encryptedPassword, $matches)) {
+            return $matches[2];
+        }
+
+        // All other methods.
+        if (preg_match('/{([^}]+)}(.*)/', $encryptedPassword, $matches)) {
+            return substr(base64_decode($matches[2]), -4);
+        }
+
+        throw new LdapRecordException('Could not extract salt from encrypted password.');
+    }
+
+    /**
+     * Determine if passwords hashed with the given method can only be
+     * changed using the password modify extended operation (RFC 3062).
+     *
+     * These hashes embed a random salt that cannot be extracted, so the
+     * stored hash cannot be reproduced for a REMOVE/ADD batch modification.
+     */
+    public static function hashMethodRequiresExop(string $method): bool
+    {
+        return in_array(strtolower($method), ['argon2', 'argon2i', 'argon2id'], true);
+    }
+
+    /**
+     * Determine if the hash method requires a salt to be given.
+     *
+     * @throws \ReflectionException
+     */
+    public static function hashMethodRequiresSalt(string $method): bool
+    {
+        $parameters = (new ReflectionMethod(static::class, $method))->getParameters();
+
+        foreach ($parameters as $parameter) {
+            if ($parameter->name === 'salt') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
