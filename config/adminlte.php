@@ -228,7 +228,8 @@ return [
     'dashboard_url' => 'home',
     'logout_url' => 'logout',
     'login_url' => '/',
-    'register_url' => 'register',
+    // Same switch as routes/auth.php: no link to a /register route that does not exist.
+    'register_url' => env('REGISTRATION_ENABLED', false) ? 'register' : false,
     'password_reset_url' => 'forgot/password',
     'password_email_url' => 'password/email',
     'profile_url' => false,
@@ -1059,6 +1060,22 @@ return [
                     'type' => 'css',
                     'asset' => true,
                     'location' => 'css/mobile.css',
+                ],
+            ],
+        ],
+        // Barres d'onglets en tête de carte : ce qui ne tient pas passe dans « Plus ▾ ».
+        'TabsOverflow' => [
+            'active' => true,
+            'files' => [
+                [
+                    'type' => 'css',
+                    'asset' => true,
+                    'location' => 'css/tabs-overflow.css',
+                ],
+                [
+                    'type' => 'js',
+                    'asset' => true,
+                    'location' => 'js/tabs-overflow.js',
                 ],
             ],
         ],
